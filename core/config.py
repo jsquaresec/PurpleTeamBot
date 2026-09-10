@@ -16,6 +16,7 @@ class Settings:
     discord_guild_id: int = _int("DISCORD_GUILD_ID")
     bot_owner_id: int = _int("BOT_OWNER_ID")
     database_path: str = os.getenv("DATABASE_PATH", "purple_team.db")
+    database_url: str = os.getenv("DATABASE_URL", "").strip()
     max_active_scans: int = max(1, _int("MAX_ACTIVE_SCANS", 1))
     scan_timeout_seconds: int = max(20, _int("SCAN_TIMEOUT_SECONDS", 90))
     http_timeout_seconds: int = max(5, _int("HTTP_TIMEOUT_SECONDS", 12))
@@ -27,10 +28,10 @@ class Settings:
     enformion_base_url: str = os.getenv("ENFORMION_BASE_URL", "https://devapi.enformion.com/PersonSearch").strip()
 
     virustotal_api_key: str = os.getenv("VIRUSTOTAL_API_KEY", "").strip()
-    hibp_api_key: str = os.getenv("HIBP_API_KEY", "").strip()
-    shodan_api_key: str = os.getenv("SHODAN_API_KEY", "").strip()
     abuseipdb_api_key: str = os.getenv("ABUSEIPDB_API_KEY", "").strip()
-    securitytrails_api_key: str = os.getenv("SECURITYTRAILS_API_KEY", "").strip()
+    censys_pat: str = os.getenv("CENSYS_PAT", "").strip()
+    urlscan_api_key: str = os.getenv("URLSCAN_API_KEY", "").strip()
+    otx_api_key: str = os.getenv("OTX_API_KEY", "").strip()
 
 
 settings = Settings()
