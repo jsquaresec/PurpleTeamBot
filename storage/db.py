@@ -21,6 +21,15 @@ CREATE TABLE IF NOT EXISTS scan_history (
     summary TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS audit_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    target TEXT,
+    details TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -79,3 +88,21 @@ async def record_scan(guild_id: int, user_id: int, target: str, scan_type: str, 
             (guild_id, user_id, target, scan_type, status, summary[:2000]),
         )
         await db.commit()
+
+
+async def record_audit(guild_id: int, user_id: int, action: str, target: str = "", details: str = "") -> None:
+    async with aiosqlite.connect(settings.database_path) as db:
+        await db.execute(
+            "INSERT INTO audit_events (guild_id, user_id, action, target, details) VALUES (?, ?, ?, ?, ?)",
+            (guild_id, user_id, action[:100], target[:300], details[:2000]),
+        )
+        await db.commit()
+
+
+async def recent_history(guild_id: int, limit: int = 10) -> list[tuple]:
+    async with aiosqlite.connect(settings.database_path) as db:
+        cur = await db.execute(
+            "SELECT target, scan_type, status, created_at FROM scan_history WHERE guild_id = ? ORDER BY id DESC LIMIT ?",
+            (guild_id, max(1, min(limit, 25))),
+        )
+        return await cur.fetchall()
