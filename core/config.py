@@ -28,6 +28,9 @@ class Settings:
 
     virustotal_api_key: str = os.getenv("VIRUSTOTAL_API_KEY", "").strip()
     hibp_api_key: str = os.getenv("HIBP_API_KEY", "").strip()
+    shodan_api_key: str = os.getenv("SHODAN_API_KEY", "").strip()
+    abuseipdb_api_key: str = os.getenv("ABUSEIPDB_API_KEY", "").strip()
+    securitytrails_api_key: str = os.getenv("SECURITYTRAILS_API_KEY", "").strip()
 
 
 settings = Settings()
