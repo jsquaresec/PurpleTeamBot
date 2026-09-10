@@ -1,4 +1,22 @@
-# PurpleTeamBot
+<div align="center">
+
+# 🟣 Purple Team
+
+### A J2SEC / JSquareSec Security Project
+
+**Systems • Security • Software**
+
+Lightweight Discord-based security operations, OSINT, vulnerability intelligence, defensive analysis, person intelligence, and authorized reconnaissance.
+
+[![GitHub](https://img.shields.io/badge/GitHub-jsquaresec-111111?style=for-the-badge&logo=github&logoColor=white)](https://github.com/jsquaresec)
+[![J2SEC](https://img.shields.io/badge/Brand-J2SEC-7C3AED?style=for-the-badge)](https://github.com/jsquaresec)
+[![Only The Demons](https://img.shields.io/badge/Web-onlythedemons.com-168BFF?style=for-the-badge&logo=googlechrome&logoColor=white)](https://onlythedemons.com)
+
+**Built by Joshua Jones — J2SEC / JSquareSec**
+
+</div>
+
+---
 
 Purple Team is a lightweight Discord security-operations bot designed for authorized OSINT, reconnaissance, vulnerability intelligence, defensive analysis, person intelligence, and scoped network assessment on small infrastructure such as a 1 vCPU / 1 GB RAM VPS.
 
@@ -164,3 +182,18 @@ Only `DISCORD_TOKEN` is mandatory. Provider-backed commands report that the inte
 ## Authorized-use model
 
 Active network scanning only runs against targets explicitly registered through `/scope add`. Purple Team is intended for systems you own or have permission to assess. Person-intelligence features should be used for legitimate security, fraud-prevention, identity-verification, due-diligence, or other lawful purposes consistent with the data provider's terms.
+
+---
+
+<div align="center">
+
+### J2SEC / JSquareSec
+
+**Joshua Jones**  
+**Systems • Security • Software**
+
+[GitHub](https://github.com/jsquaresec) • [Only The Demons](https://onlythedemons.com)
+
+**Build with purpose. Secure what matters. Keep learning.**
+
+</div>
