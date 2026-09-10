@@ -1,46 +1,123 @@
 # PurpleTeamBot
 
-Purple Team is a lightweight Discord security operations bot designed for authorized OSINT, reconnaissance, vulnerability intelligence, defensive analysis, and scoped network assessment on small infrastructure such as a 1 vCPU / 1 GB RAM VPS.
+Purple Team is a lightweight Discord security-operations bot designed for authorized OSINT, reconnaissance, vulnerability intelligence, defensive analysis, person intelligence, and scoped network assessment on small infrastructure such as a 1 vCPU / 1 GB RAM VPS.
 
-## Design goals
+## What is included
 
-- Runs comfortably on 1c/1g with conservative concurrency.
-- Uses SQLite instead of a local database server.
-- Uses async HTTP/DNS calls and one active Nmap scan by default.
-- Requires explicit guild scope registration before active scans.
-- Keeps passive intelligence separate from active assessment.
-- Presents concise Discord embeds instead of raw tool output.
+### OSINT and passive recon
+- DNS A/AAAA/MX/NS/TXT lookups
+- RDAP domain/IP intelligence
+- Certificate Transparency subdomain discovery
+- GitHub/public username correlation
+- HTTP status, server fingerprint and security-header checks
+- TLS certificate/protocol/cipher inspection
+- Lightweight public person/identifier correlation
 
-## Command families
+### Person intelligence
+- EnformionGO Person Search
+- EnformionGO reverse phone
+- EnformionGO reverse email
+- EnformionGO address intelligence
+- HIBP breach-exposure lookup
 
-- `/scope add|remove|list`
-- `/scan quick|service`
-- `/osint domain|ip|dns|rdap|email|username|person`
-- `/intel ip|domain|url|hash`
-- `/vuln cve|kev`
-- `/recon web|tls|subdomains`
-- `/investigate domain`
-- `/status`
+Person-data commands are intentionally restricted to the bot owner or members with **Manage Server**, return ephemerally, and are audit logged. Rich provider records are not dumped into public Discord channels.
 
-Person/username OSINT is limited to lawful public-source correlation. The bot does not retrieve private addresses, credentials, financial information, or non-public personal records.
+### Threat and vulnerability intelligence
+- VirusTotal domain/IP/hash reputation
+- CVE.org CVE records
+- FIRST EPSS exploitation probability
+- CISA Known Exploited Vulnerabilities correlation
+- Have I Been Pwned breach exposure
 
-## Active scan safety
+### Authorized active assessment
+- Lightweight Nmap quick scan
+- Lightweight Nmap service/version scan
+- Explicit per-guild target scope
+- One active scan by default
+- Curated ports, hard timeouts and low retry counts
+- Scan history
 
-Nmap commands only run against targets explicitly registered by a guild administrator through `/scope add`. The wrapper uses curated ports, conservative timing, one scan at a time by default, and hard timeouts.
+### Defensive analysis
+- Uploaded-file MD5/SHA-1/SHA-256 hashing
+- Optional VirusTotal SHA-256 lookup
+- `.eml` header parsing
+- Authentication-Results/route-hop summary
+
+### Investigation workflow
+`/investigate <target>` combines DNS, Certificate Transparency, HTTP/security-header analysis, and a lightweight Nmap pass when the target has been explicitly authorized in `/scope`.
+
+## Commands
+
+```text
+/scope add <target>
+/scope remove <target>
+/scope list
+
+/scan quick <target>
+/scan service <target>
+
+/osint dns <domain>
+/osint rdap <target>
+/osint subdomains <domain>
+/osint username <username>
+
+/person search <first_name> <last_name> [city] [state] [email] [phone]
+/person public <query>
+
+/reverse phone <phone>
+/reverse email <email>
+/reverse address <street> <city_state_zip>
+
+/intel lookup <domain|ip|hash>
+/intel breach <account>
+
+/vuln cve <CVE-ID>
+
+/recon web <target>
+/recon tls <target> [port]
+
+/analyze file <attachment> [virustotal]
+/analyze email <attachment.eml>
+
+/investigate <target>
+/history
+/status
+```
+
+## Resource design
+
+The bot is intentionally designed around a 1c/1g host:
+
+- SQLite rather than PostgreSQL/Redis for the initial deployment.
+- Async HTTP/DNS I/O.
+- No locally hosted CVE, breach, reputation, or OSINT datasets.
+- One Nmap job at a time by default.
+- Maximum uploaded analysis file size of 8 MB.
+- Maximum uploaded email size of 2 MB.
+- systemd `MemoryMax=700M` and `CPUQuota=90%` in the provided unit.
 
 ## Requirements
 
+- Ubuntu/Debian-style Linux recommended
 - Python 3.11+
-- Nmap installed on the host
+- Nmap
 
-## Install
+## Quick install
+
+```bash
+git clone https://github.com/jsquaresec/PurpleTeamBot.git
+cd PurpleTeamBot
+sudo bash deploy/install.sh
+sudo nano /opt/PurpleTeamBot/.env
+sudo systemctl restart purpleteambot
+sudo systemctl status purpleteambot
+```
+
+Manual development setup:
 
 ```bash
 sudo apt update
 sudo apt install -y python3 python3-venv nmap
-
-git clone https://github.com/jsquaresec/PurpleTeamBot.git
-cd PurpleTeamBot
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -60,10 +137,20 @@ MAX_ACTIVE_SCANS=1
 SCAN_TIMEOUT_SECONDS=90
 HTTP_TIMEOUT_SECONDS=12
 USER_AGENT=PurpleTeamBot/0.1
+
+ENFORMION_AP_NAME=
+ENFORMION_AP_PASSWORD=
+ENFORMION_SEARCH_TYPE=Person
+ENFORMION_BASE_URL=https://devapi.enformion.com/PersonSearch
+
+VIRUSTOTAL_API_KEY=
+HIBP_API_KEY=
 ```
 
-`DISCORD_GUILD_ID` is optional but recommended while developing because guild commands sync much faster than global commands.
+Only `DISCORD_TOKEN` is mandatory. Provider-backed commands report that the integration is not configured when its credentials are missing. FIRST EPSS, CISA KEV, RDAP, Certificate Transparency, DNS and basic HTTP/TLS checks do not require private API credentials.
 
-## Roadmap
+`DISCORD_GUILD_ID` is optional but recommended during development because commands sync directly to your test server instead of waiting for global Discord propagation.
 
-The repo starts with a functional lightweight core and leaves room for API-backed additions such as EPSS, CISA KEV correlation, certificate transparency, reputation providers, public breach-notification providers, passive DNS, malware reputation, reporting, cases, and historical comparisons without hosting large local datasets.
+## Authorized-use model
+
+Active network scanning only runs against targets explicitly registered through `/scope add`. Purple Team is intended for systems you own or have permission to assess. Person-intelligence features should be used for legitimate security, fraud-prevention, identity-verification, due-diligence, or other lawful purposes consistent with the data provider's terms.
