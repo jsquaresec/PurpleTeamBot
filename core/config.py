@@ -21,5 +21,13 @@ class Settings:
     http_timeout_seconds: int = max(5, _int("HTTP_TIMEOUT_SECONDS", 12))
     user_agent: str = os.getenv("USER_AGENT", "PurpleTeamBot/0.1")
 
+    enformion_ap_name: str = os.getenv("ENFORMION_AP_NAME", "").strip()
+    enformion_ap_password: str = os.getenv("ENFORMION_AP_PASSWORD", "").strip()
+    enformion_search_type: str = os.getenv("ENFORMION_SEARCH_TYPE", "Person").strip()
+    enformion_base_url: str = os.getenv("ENFORMION_BASE_URL", "https://devapi.enformion.com/PersonSearch").strip()
+
+    virustotal_api_key: str = os.getenv("VIRUSTOTAL_API_KEY", "").strip()
+    hibp_api_key: str = os.getenv("HIBP_API_KEY", "").strip()
+
 
 settings = Settings()
