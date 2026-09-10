@@ -19,7 +19,7 @@ Lightweight Discord-based security operations, OSINT, vulnerability intelligence
 
 ---
 
-Purple Team is a lightweight security-operations Discord bot combining public-source OSINT, threat intelligence, vulnerability prioritization, defensive analysis, person intelligence, and authorized reconnaissance in one platform. It is designed to stay efficient through async I/O, conservative scan concurrency, compact Nmap jobs, remote intelligence APIs, and no heavyweight local vulnerability databases.
+Purple Team is a lightweight security-operations Discord bot combining public-source OSINT, threat intelligence, vulnerability prioritization, defensive analysis, identity intelligence, and authorized reconnaissance in one platform. It is designed to stay efficient through async I/O, conservative scan concurrency, compact Nmap jobs, remote intelligence APIs, and no heavyweight local vulnerability databases.
 
 ## OSINT and passive reconnaissance
 
@@ -37,22 +37,25 @@ Purple Team is a lightweight security-operations Discord bot combining public-so
 - web technology fingerprinting
 - TLS certificate, protocol, cipher, expiry, issuer, subject, and SAN inspection
 - public person / identifier correlation
+- Digital Footprint email, phone, and username correlation
+- USACallerLookup US phone carrier/location/complaint intelligence
 - urlscan.io web intelligence
 - AlienVault OTX IOC enrichment
 
-## Person intelligence
+## Identity and person intelligence
 
-- People Data Labs person enrichment
-- People Data Labs phone-identifier matching
-- People Data Labs email-identifier matching
-- People Data Labs address-based matching
+- public-source person correlation
+- Digital Footprint email lookup
+- Digital Footprint username lookup
+- Digital Footprint phone correlation when supported
+- USACallerLookup US phone carrier and assigned-location intelligence
+- USACallerLookup FTC robocall complaint context
 - XposedOrNot email breach exposure
 - HIBP Pwned Passwords k-anonymity checks
 - public username/profile correlation
 - email-domain correlation
-- public-source enrichment
 
-Person-data commands are permission-gated, return ephemerally, and are audit logged. People Data Labs obscures contact-data values on its free plan; Purple Team respects those limits and does not attempt to bypass them.
+Person and identifier commands are permission-gated, return ephemerally, and are audit logged. Digital Footprint verifies platform-registration and public-web signals; USACallerLookup uses public numbering and FTC complaint data. Neither provider should be treated as proof that a person owns an account or placed a reported call.
 
 ## Threat and vulnerability intelligence
 
@@ -133,7 +136,7 @@ Exposure checks only collect response status and metadata; they do not dump disc
 
 /reverse phone <phone>
 /reverse email <email>
-/reverse address <street> <city_state_zip>
+/reverse username <username>
 
 /intel lookup <domain|ip|hash>
 /intel breach <email>
@@ -215,8 +218,8 @@ SCAN_TIMEOUT_SECONDS=90
 HTTP_TIMEOUT_SECONDS=12
 USER_AGENT=PurpleTeamBot/0.1
 
-PDL_API_KEY=
-PDL_BASE_URL=https://api.peopledatalabs.com/v5/person/enrich
+DIGITAL_FOOTPRINT_API_KEY=
+DIGITAL_FOOTPRINT_BASE_URL=https://api.digifootprint.dev/v1/lookup
 
 VIRUSTOTAL_API_KEY=
 ABUSEIPDB_API_KEY=
@@ -225,9 +228,9 @@ URLSCAN_API_KEY=
 OTX_API_KEY=
 ```
 
-Only `DISCORD_TOKEN` is mandatory. Provider-backed commands report when an integration is not configured. XposedOrNot, HIBP Pwned Passwords, FIRST EPSS, CISA KEV, RDAP, Certificate Transparency, DNS, reverse DNS, email-domain posture, and basic HTTP/TLS checks do not require paid API credentials.
+Only `DISCORD_TOKEN` is mandatory. USACallerLookup, XposedOrNot, HIBP Pwned Passwords, FIRST EPSS, CISA KEV, RDAP, Certificate Transparency, DNS, reverse DNS, email-domain posture, and basic HTTP/TLS checks do not require paid API credentials. Digital Footprint requires an API key and currently includes a limited free lookup allowance for new accounts.
 
-The project intentionally does not require EnformionGO, the paid HIBP account API, Shodan, or SecurityTrails.
+The project intentionally does not require EnformionGO, People Data Labs, the paid HIBP account API, Shodan, or SecurityTrails.
 
 `DISCORD_GUILD_ID` is optional but useful during development because commands can sync directly to a test server.
 
