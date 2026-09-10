@@ -3,6 +3,7 @@ import json
 import discord
 from discord import app_commands
 
+from bot.ui import make_embed
 from core.config import settings
 from services.analyzers import analyze_email_headers, hash_bytes
 from services.integrations import integrations
@@ -10,13 +11,12 @@ from services.passive_service import passive_service
 from services.tls_service import inspect_tls
 from storage.db import record_audit
 
-PURPLE = 0x7C3AED
 MAX_FILE_BYTES = 8 * 1024 * 1024
 MAX_EMAIL_BYTES = 2 * 1024 * 1024
 
 
-def _embed(title: str, text: str) -> discord.Embed:
-    return discord.Embed(title=f"🟣 Purple Team • {title}", description=text[:4000], color=PURPLE)
+def _embed(title: str, text: str, *, kind: str = "default") -> discord.Embed:
+    return make_embed(title, text, kind=kind)
 
 
 def _guild_id(interaction: discord.Interaction) -> int:
@@ -33,22 +33,24 @@ def _privileged(interaction: discord.Interaction) -> bool:
 
 async def _reverse_result(interaction: discord.Interaction, action: str, label: str, func) -> None:
     if not _privileged(interaction):
-        await interaction.response.send_message("You need Manage Server permission for person intelligence.", ephemeral=True)
+        await interaction.response.send_message(embed=_embed("Access Denied", "You need **Manage Server** permission for person intelligence.", kind="error"), ephemeral=True)
         return
     gid = _guild_id(interaction)
     await interaction.response.defer(thinking=True, ephemeral=True)
     await record_audit(gid, interaction.user.id, action, "redacted")
     try:
         data = await func()
-        # Never dump rich PII responses into Discord. Confirm match/status and keep the query audited.
         if isinstance(data, dict):
             match = data.get("Match") or data.get("match") or data.get("Result") or data.get("result") or data
-            status = "match returned" if match else "no match returned"
+            status = "Match returned" if match else "No match returned"
         else:
-            status = "response returned"
-        await interaction.followup.send(embed=_embed(label, f"EnformionGO: **{status}**\n\nDetailed provider records are intentionally not posted into Discord channels."), ephemeral=True)
+            status = "Response returned"
+        panel = _embed(label, "Permission-gated EnformionGO intelligence lookup completed.", kind="success")
+        panel.add_field(name="🔎 Provider Status", value=f"**{status}**", inline=False)
+        panel.add_field(name="🔒 Privacy", value="Detailed provider records are intentionally not posted into Discord channels.", inline=False)
+        await interaction.followup.send(embed=panel, ephemeral=True)
     except Exception as exc:
-        await interaction.followup.send(embed=_embed(label, str(exc)), ephemeral=True)
+        await interaction.followup.send(embed=_embed(f"{label} Failed", str(exc), kind="error"), ephemeral=True)
 
 
 def register_extra_commands(bot) -> None:
@@ -66,40 +68,39 @@ def register_extra_commands(bot) -> None:
 
     @reverse.command(name="address", description="Find people associated with an address through EnformionGO")
     async def reverse_address(interaction: discord.Interaction, street: str, city_state_zip: str):
-        await _reverse_result(
-            interaction,
-            "person.address",
-            "Address Intelligence",
-            lambda: integrations.enformion_address(street, city_state_zip),
-        )
+        await _reverse_result(interaction, "person.address", "Address Intelligence", lambda: integrations.enformion_address(street, city_state_zip))
 
     @analyze.command(name="file", description="Hash a small uploaded file and optionally check its SHA-256 in VirusTotal")
     async def analyze_file(interaction: discord.Interaction, attachment: discord.Attachment, virustotal: bool = True):
         if attachment.size > MAX_FILE_BYTES:
-            await interaction.response.send_message("File is too large for this lightweight worker (8 MB max).", ephemeral=True)
+            await interaction.response.send_message(embed=_embed("File Rejected", "The uploaded file exceeds the **8 MB** analysis limit.", kind="warning"), ephemeral=True)
             return
         await interaction.response.defer(thinking=True, ephemeral=True)
         data = await attachment.read()
         hashes = hash_bytes(data)
-        text = "\n".join(f"**{k.upper()}:** `{v}`" for k, v in hashes.items())
+        panel = _embed("File Analysis", f"Defensive analysis completed for `{attachment.filename}`.", kind="info")
+        for key, value in hashes.items():
+            panel.add_field(name=key.upper(), value=f"`{value}`", inline=False)
         if virustotal and settings.virustotal_api_key:
             try:
                 vt = await integrations.virustotal_lookup(hashes["sha256"])
-                text += f"\n\n**VirusTotal:** `{json.dumps(vt.get('last_analysis_stats', {}))}`"
+                panel.add_field(name="🧪 VirusTotal", value=f"`{json.dumps(vt.get('last_analysis_stats', {}))}`"[:1024], inline=False)
             except Exception as exc:
-                text += f"\n\n**VirusTotal:** {exc}"
-        await interaction.followup.send(embed=_embed("File Analysis", text), ephemeral=True)
+                panel.add_field(name="⚠️ VirusTotal", value=str(exc)[:1024], inline=False)
+        await interaction.followup.send(embed=panel, ephemeral=True)
 
     @analyze.command(name="email", description="Parse headers from an uploaded .eml file")
     async def analyze_email(interaction: discord.Interaction, attachment: discord.Attachment):
         if attachment.size > MAX_EMAIL_BYTES:
-            await interaction.response.send_message("Email file is too large (2 MB max).", ephemeral=True)
+            await interaction.response.send_message(embed=_embed("Email Rejected", "The uploaded email exceeds the **2 MB** analysis limit.", kind="warning"), ephemeral=True)
             return
         await interaction.response.defer(thinking=True, ephemeral=True)
         raw = await attachment.read()
         result = analyze_email_headers(raw)
-        text = "\n".join(f"**{k.replace('_', ' ').title()}:** {v}" for k, v in result.items())
-        await interaction.followup.send(embed=_embed("Email Header Analysis", text), ephemeral=True)
+        panel = _embed("Email Header Analysis", f"Header analysis completed for `{attachment.filename}`.", kind="info")
+        for key, value in result.items():
+            panel.add_field(name=key.replace('_', ' ').title(), value=str(value)[:1024], inline=False)
+        await interaction.followup.send(embed=panel, ephemeral=True)
 
     @recon.command(name="web", description="Probe HTTP response and common security headers")
     async def recon_web(interaction: discord.Interaction, target: str):
@@ -107,20 +108,29 @@ def register_extra_commands(bot) -> None:
         try:
             data = await passive_service.http_probe(target)
             missing = [k for k, v in data.get("security_headers", {}).items() if not v]
-            text = f"**URL:** {data.get('url')}\n**Status:** {data.get('status')}\n**Server:** {data.get('server') or 'hidden'}\n**Missing security headers:** {', '.join(missing) if missing else 'none'}"
-            await interaction.followup.send(embed=_embed("Web Recon", text))
+            panel = _embed("Web Recon", f"Passive HTTP posture for `{target}`.", kind="info")
+            panel.add_field(name="🌐 URL", value=str(data.get('url') or 'Unknown'), inline=False)
+            panel.add_field(name="📡 HTTP Status", value=str(data.get('status') or 'Unknown'), inline=True)
+            panel.add_field(name="🖥️ Server", value=str(data.get('server') or 'Hidden'), inline=True)
+            panel.add_field(name="🛡️ Missing Security Headers", value="\n".join(f"• `{x}`" for x in missing) if missing else "✅ None detected", inline=False)
+            await interaction.followup.send(embed=panel)
         except Exception as exc:
-            await interaction.followup.send(embed=_embed("Web Recon", str(exc)), ephemeral=True)
+            await interaction.followup.send(embed=_embed("Web Recon Failed", str(exc), kind="error"), ephemeral=True)
 
     @recon.command(name="tls", description="Inspect the TLS certificate and negotiated protocol")
     async def recon_tls(interaction: discord.Interaction, target: str, port: int = 443):
         await interaction.response.defer(thinking=True)
         try:
             data = await inspect_tls(target, port)
-            text = f"**Protocol:** {data['protocol']}\n**Cipher:** {data['cipher']}\n**Expires:** {data['not_after']}\n**Days remaining:** {data['days_remaining']}\n**SAN entries:** {data['san_count']}"
-            await interaction.followup.send(embed=_embed("TLS Recon", text))
+            panel = _embed("TLS Recon", f"TLS posture for `{target}:{port}`.", kind="info")
+            panel.add_field(name="🔐 Protocol", value=str(data['protocol']), inline=True)
+            panel.add_field(name="🔑 Cipher", value=str(data['cipher'])[:1024], inline=True)
+            panel.add_field(name="📅 Expires", value=str(data['not_after']), inline=False)
+            panel.add_field(name="⏳ Days Remaining", value=str(data['days_remaining']), inline=True)
+            panel.add_field(name="🌐 SAN Entries", value=str(data['san_count']), inline=True)
+            await interaction.followup.send(embed=panel)
         except Exception as exc:
-            await interaction.followup.send(embed=_embed("TLS Recon", str(exc)), ephemeral=True)
+            await interaction.followup.send(embed=_embed("TLS Recon Failed", str(exc), kind="error"), ephemeral=True)
 
     bot.tree.add_command(reverse)
     bot.tree.add_command(analyze)
