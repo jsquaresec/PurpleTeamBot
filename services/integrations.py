@@ -11,27 +11,39 @@ class IntegrationService:
     def __init__(self) -> None:
         self.timeout = httpx.Timeout(settings.http_timeout_seconds)
 
-    async def enformion_person_search(self, payload: dict) -> dict:
+    async def _enformion(self, endpoint: str, search_type: str, payload: dict) -> dict:
         if not settings.enformion_ap_name or not settings.enformion_ap_password:
             raise RuntimeError("Enformion is not configured")
         headers = {
             "galaxy-ap-name": settings.enformion_ap_name,
             "galaxy-ap-password": settings.enformion_ap_password,
-            "galaxy-search-type": settings.enformion_search_type,
+            "galaxy-search-type": search_type,
             "User-Agent": settings.user_agent,
         }
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(settings.enformion_base_url, json=payload, headers=headers)
+            response = await client.post(endpoint, json=payload, headers=headers)
             response.raise_for_status()
             return response.json()
+
+    async def enformion_person_search(self, payload: dict) -> dict:
+        return await self._enformion(settings.enformion_base_url, settings.enformion_search_type, payload)
+
+    async def enformion_phone(self, phone: str) -> dict:
+        return await self._enformion("https://devapi.enformion.com/Phone/Enrich", "DevAPICallerID", {"Phone": phone})
+
+    async def enformion_email(self, email: str) -> dict:
+        return await self._enformion("https://devapi.enformion.com/Email/Id", "DevAPIEmailID", {"Email": email})
+
+    async def enformion_address(self, address_line1: str, address_line2: str, exact_match: str = "") -> dict:
+        payload = {"addressline1": address_line1, "addressline2": address_line2}
+        if exact_match:
+            payload["ExactMatch"] = exact_match
+        return await self._enformion("https://devapi.enformion.com/Address/Id", "DevAPIAddressID", payload)
 
     async def hibp_account(self, account: str) -> list[dict]:
         if not settings.hibp_api_key:
             raise RuntimeError("HIBP is not configured")
-        headers = {
-            "hibp-api-key": settings.hibp_api_key,
-            "User-Agent": settings.user_agent,
-        }
+        headers = {"hibp-api-key": settings.hibp_api_key, "User-Agent": settings.user_agent}
         url = f"https://haveibeenpwned.com/api/v3/breachedaccount/{quote(account, safe='')}"
         async with httpx.AsyncClient(timeout=self.timeout, headers=headers) as client:
             response = await client.get(url, params={"truncateResponse": "false"})
@@ -77,7 +89,6 @@ class IntegrationService:
             return rows[0] if rows else None
 
     async def cisa_kev(self, cve_id: str) -> dict | None:
-        # Official CISA KEV JSON feed. Kept remote so the 1 GB VPS does not retain a local vuln DB.
         url = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
         cve_id = cve_id.strip().upper()
         async with httpx.AsyncClient(timeout=self.timeout, headers={"User-Agent": settings.user_agent}) as client:
