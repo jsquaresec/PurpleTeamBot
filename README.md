@@ -9,6 +9,7 @@
 Lightweight Discord-based security operations, OSINT, vulnerability intelligence, defensive analysis, person intelligence, and authorized security assessment.
 
 [![GitHub](https://img.shields.io/badge/GitHub-jsquaresec-111111?style=for-the-badge&logo=github&logoColor=white)](https://github.com/jsquaresec)
+[![Certifications](https://img.shields.io/badge/Verified-Credentials-168BFF?style=for-the-badge&logo=googlechrome&logoColor=white)](https://jsquaresec.github.io/jsquaresec/certifications/)
 [![J2SEC](https://img.shields.io/badge/Brand-J2SEC-7C3AED?style=for-the-badge)](https://github.com/jsquaresec)
 [![Only The Demons](https://img.shields.io/badge/Web-onlythedemons.com-168BFF?style=for-the-badge&logo=googlechrome&logoColor=white)](https://onlythedemons.com)
 
@@ -236,7 +237,7 @@ Active network and web assessment only runs against targets explicitly registere
 **Joshua Jones**  
 **Systems • Security • Software**
 
-[GitHub](https://github.com/jsquaresec) • [Only The Demons](https://onlythedemons.com)
+[GitHub](https://github.com/jsquaresec) • [Verified Credentials](https://jsquaresec.github.io/jsquaresec/certifications/) • [Only The Demons](https://onlythedemons.com)
 
 **Build with purpose. Secure what matters. Keep learning.**
 
