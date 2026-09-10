@@ -1,0 +1,5 @@
+discord.py>=2.5,<3
+aiosqlite>=0.20,<1
+httpx>=0.28,<1
+dnspython>=2.7,<3
+python-dotenv>=1.0,<2
