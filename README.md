@@ -8,6 +8,7 @@ Purple Team is a lightweight Discord security-operations bot designed for author
 - DNS A/AAAA/MX/NS/TXT lookups
 - RDAP domain/IP intelligence
 - Certificate Transparency subdomain discovery
+- SecurityTrails passive subdomain discovery
 - GitHub/public username correlation
 - HTTP status, server fingerprint and security-header checks
 - TLS certificate/protocol/cipher inspection
@@ -24,6 +25,8 @@ Person-data commands are intentionally restricted to the bot owner or members wi
 
 ### Threat and vulnerability intelligence
 - VirusTotal domain/IP/hash reputation
+- AbuseIPDB IP reputation
+- Shodan host intelligence
 - CVE.org CVE records
 - FIRST EPSS exploitation probability
 - CISA Known Exploited Vulnerabilities correlation
@@ -70,6 +73,10 @@ Person-data commands are intentionally restricted to the bot owner or members wi
 
 /intel lookup <domain|ip|hash>
 /intel breach <account>
+
+/reputation abuseipdb <ip>
+/reputation shodan <ip>
+/passive subdomains <domain>
 
 /vuln cve <CVE-ID>
 
@@ -145,6 +152,9 @@ ENFORMION_BASE_URL=https://devapi.enformion.com/PersonSearch
 
 VIRUSTOTAL_API_KEY=
 HIBP_API_KEY=
+SHODAN_API_KEY=
+ABUSEIPDB_API_KEY=
+SECURITYTRAILS_API_KEY=
 ```
 
 Only `DISCORD_TOKEN` is mandatory. Provider-backed commands report that the integration is not configured when its credentials are missing. FIRST EPSS, CISA KEV, RDAP, Certificate Transparency, DNS and basic HTTP/TLS checks do not require private API credentials.
