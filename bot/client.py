@@ -167,46 +167,30 @@ class PurpleTeamBot(commands.Bot):
                     panel.add_field(name=key.replace('_', ' ').title(), value=str(value)[:1024], inline=True)
             await interaction.followup.send(embed=panel)
 
-        @person.command(name="search", description="Admin-only People Data Labs person enrichment")
+        @person.command(name="search", description="Permission-gated public-source person and identifier search")
         async def person_search(interaction: discord.Interaction, first_name: str, last_name: str, city: str = "", state: str = "", email: str = "", phone: str = ""):
             gid = guild_id(interaction)
             if not can_use_person_search(interaction):
                 await interaction.response.send_message(embed=embed("Access Denied", "You need **Manage Server** permission to use person intelligence.", kind="error"), ephemeral=True)
                 return
-            if not (city or state or email or phone):
-                await interaction.response.send_message(embed=embed("More Information Required", "People Data Labs requires a location, email, or phone identifier in addition to a first and last name. Add at least one of `city`, `state`, `email`, or `phone`.", kind="warning"), ephemeral=True)
-                return
             await interaction.response.defer(thinking=True, ephemeral=True)
             await record_audit(gid, interaction.user.id, "person.search", f"{first_name} {last_name}", f"city={city};state={state};email_supplied={bool(email)};phone_supplied={bool(phone)}")
             try:
-                data = await integrations.pdl_person_enrich(
-                    first_name=first_name.strip(),
-                    last_name=last_name.strip(),
-                    locality=city.strip(),
-                    region=state.strip(),
-                    email=email.strip(),
-                    phone=phone.strip(),
-                )
-                found = bool(data.get("found"))
-                record = data.get("data", {}) if found else {}
-                panel = embed("Person Intelligence", "Permission-gated People Data Labs enrichment completed.", kind="success" if found else "warning")
+                query = " ".join(x for x in [first_name.strip(), last_name.strip(), city.strip(), state.strip()] if x)
+                public_data = await passive_service.person_search(query)
+                panel = embed("Person Intelligence", "Public-source person correlation completed.", kind="info")
                 panel.add_field(name="👤 Query", value=f"**{first_name} {last_name}**", inline=True)
-                panel.add_field(name="🔎 Match", value="Found" if found else "No match returned", inline=True)
-                if found:
-                    safe_fields = {
-                        "Full Name": record.get("full_name"),
-                        "Headline": record.get("headline"),
-                        "Industry": record.get("industry"),
-                        "Job Title": record.get("job_title"),
-                        "Company": record.get("job_company_name"),
-                        "Location": record.get("location_name"),
-                        "GitHub": record.get("github_url"),
-                        "LinkedIn": record.get("linkedin_url"),
-                    }
-                    details = "\n".join(f"**{k}:** {v}" for k, v in safe_fields.items() if v)
-                    if details:
-                        panel.add_field(name="📋 Public / Professional Profile", value=details[:1024], inline=False)
-                panel.add_field(name="🔒 Free Plan", value="Contact-data values are obscured by People Data Labs on the free plan. Purple Team does not attempt to bypass those limits.", inline=False)
+                panel.add_field(name="🔎 Public Sources", value=f"```json\n{json.dumps(public_data, indent=2)[:850]}\n```", inline=False)
+                identifier = email.strip() or phone.strip()
+                if identifier and settings.digital_footprint_api_key:
+                    footprint = await integrations.digital_footprint_lookup(identifier)
+                    summary = []
+                    for key, label in (("queryType", "Type"), ("matches", "Matches"), ("socialMatches", "Social Matches"), ("derivedMatches", "Derived Matches")):
+                        if footprint.get(key) is not None:
+                            summary.append(f"**{label}:** {footprint.get(key)}")
+                    panel.add_field(name="🌐 Digital Footprint", value="\n".join(summary)[:1024] or "Lookup completed.", inline=False)
+                elif identifier:
+                    panel.add_field(name="🌐 Digital Footprint", value="Not configured. Add `DIGITAL_FOOTPRINT_API_KEY` to enable identifier correlation.", inline=False)
                 await interaction.followup.send(embed=panel, ephemeral=True)
             except Exception as exc:
                 await interaction.followup.send(embed=embed("Person Search Failed", str(exc), kind="error"), ephemeral=True)
@@ -324,7 +308,7 @@ class PurpleTeamBot(commands.Bot):
             panel.add_field(
                 name="🌐 Configured Intelligence Providers",
                 value="\n".join([
-                    status_dot(bool(settings.pdl_api_key), label="**People Data Labs**"),
+                    status_dot(bool(settings.digital_footprint_api_key), label="**Digital Footprint**"),
                     status_dot(bool(settings.virustotal_api_key), label="**VirusTotal**"),
                     status_dot(bool(settings.abuseipdb_api_key), label="**AbuseIPDB**"),
                     status_dot(bool(settings.censys_pat), label="**Censys**"),
@@ -336,6 +320,7 @@ class PurpleTeamBot(commands.Bot):
             panel.add_field(
                 name="🧠 Free / Built-in Intelligence",
                 value="\n".join([
+                    always_status("**USACallerLookup**"),
                     always_status("**XposedOrNot**"),
                     always_status("**HIBP Pwned Passwords**"),
                     always_status("**FIRST EPSS**"),
