@@ -25,8 +25,11 @@ jobs:
           import bot.client
           import bot.extra_commands
           import bot.provider_commands
+          import bot.security_commands
           import core.config
+          import services.advanced_osint
           import services.analyzers
+          import services.assessment
           import services.integrations
           import services.nmap_service
           import services.passive_service
@@ -34,4 +37,23 @@ jobs:
           import services.tls_service
           import storage.db
           print('PurpleTeamBot imports OK')
+          PY
+      - name: Discord command registration smoke test
+        run: |
+          python - <<'PY'
+          from bot.client import PurpleTeamBot
+          from bot.extra_commands import register_extra_commands
+          from bot.provider_commands import register_provider_commands
+          from bot.security_commands import register_security_commands
+
+          bot = PurpleTeamBot()
+          register_extra_commands(bot)
+          register_provider_commands(bot)
+          register_security_commands(bot)
+          bot._register_commands()
+          commands = bot.tree.get_commands()
+          names = [command.name for command in commands]
+          assert len(names) == len(set(names)), f'duplicate top-level commands: {names}'
+          assert {'scope', 'scan', 'osint', 'person', 'intel', 'vuln', 'reverse', 'analyze', 'recon', 'reputation', 'passive', 'osintx', 'assess', 'investigate', 'history', 'status'} <= set(names)
+          print(f'PurpleTeamBot command registration OK: {len(names)} top-level commands')
           PY
