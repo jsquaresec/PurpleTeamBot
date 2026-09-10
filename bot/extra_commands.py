@@ -39,36 +39,38 @@ async def _reverse_result(interaction: discord.Interaction, action: str, label: 
     await interaction.response.defer(thinking=True, ephemeral=True)
     await record_audit(gid, interaction.user.id, action, "redacted")
     try:
-        data = await func()
-        if isinstance(data, dict):
-            match = data.get("Match") or data.get("match") or data.get("Result") or data.get("result") or data
-            status = "Match returned" if match else "No match returned"
-        else:
-            status = "Response returned"
-        panel = _embed(label, "Permission-gated EnformionGO intelligence lookup completed.", kind="success")
-        panel.add_field(name="🔎 Provider Status", value=f"**{status}**", inline=False)
-        panel.add_field(name="🔒 Privacy", value="Detailed provider records are intentionally not posted into Discord channels.", inline=False)
+        result = await func()
+        found = bool(result.get("found")) if isinstance(result, dict) else bool(result)
+        panel = _embed(label, "Permission-gated People Data Labs lookup completed.", kind="success" if found else "warning")
+        panel.add_field(name="🔎 Match Status", value="**Match found**" if found else "No match returned", inline=False)
+        panel.add_field(name="🔒 Free Plan", value="People Data Labs obscures contact-data values on the free plan. Purple Team uses supplied identifiers for matching but does not expose hidden contact fields.", inline=False)
+        panel.add_field(name="🛡️ Privacy", value="Detailed provider records are intentionally not posted into Discord channels.", inline=False)
         await interaction.followup.send(embed=panel, ephemeral=True)
     except Exception as exc:
         await interaction.followup.send(embed=_embed(f"{label} Failed", str(exc), kind="error"), ephemeral=True)
 
 
 def register_extra_commands(bot) -> None:
-    reverse = app_commands.Group(name="reverse", description="Permission-gated reverse person intelligence")
+    reverse = app_commands.Group(name="reverse", description="Permission-gated person identifier intelligence")
     analyze = app_commands.Group(name="analyze", description="Defensive file and email analysis")
     recon = app_commands.Group(name="recon", description="Lightweight passive reconnaissance")
 
-    @reverse.command(name="phone", description="Reverse phone lookup through EnformionGO")
+    @reverse.command(name="phone", description="Match a phone identifier through People Data Labs")
     async def reverse_phone(interaction: discord.Interaction, phone: str):
-        await _reverse_result(interaction, "person.phone", "Reverse Phone", lambda: integrations.enformion_phone(phone))
+        await _reverse_result(interaction, "person.phone", "Reverse Phone", lambda: integrations.pdl_person_enrich(phone=phone))
 
-    @reverse.command(name="email", description="Reverse email lookup through EnformionGO")
+    @reverse.command(name="email", description="Match an email identifier through People Data Labs")
     async def reverse_email(interaction: discord.Interaction, email: str):
-        await _reverse_result(interaction, "person.email", "Reverse Email", lambda: integrations.enformion_email(email))
+        await _reverse_result(interaction, "person.email", "Reverse Email", lambda: integrations.pdl_person_enrich(email=email))
 
-    @reverse.command(name="address", description="Find people associated with an address through EnformionGO")
+    @reverse.command(name="address", description="Match a person from address information through People Data Labs")
     async def reverse_address(interaction: discord.Interaction, street: str, city_state_zip: str):
-        await _reverse_result(interaction, "person.address", "Address Intelligence", lambda: integrations.enformion_address(street, city_state_zip))
+        await _reverse_result(
+            interaction,
+            "person.address",
+            "Address Intelligence",
+            lambda: integrations.pdl_person_enrich(street_address=street, location=city_state_zip),
+        )
 
     @analyze.command(name="file", description="Hash a small uploaded file and optionally check its SHA-256 in VirusTotal")
     async def analyze_file(interaction: discord.Interaction, attachment: discord.Attachment, virustotal: bool = True):
