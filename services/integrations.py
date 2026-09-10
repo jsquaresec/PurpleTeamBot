@@ -40,17 +40,24 @@ class IntegrationService:
             payload["ExactMatch"] = exact_match
         return await self._enformion("https://devapi.enformion.com/Address/Id", "DevAPIAddressID", payload)
 
-    async def hibp_account(self, account: str) -> list[dict]:
-        if not settings.hibp_api_key:
-            raise RuntimeError("HIBP is not configured")
-        headers = {"hibp-api-key": settings.hibp_api_key, "User-Agent": settings.user_agent}
-        url = f"https://haveibeenpwned.com/api/v3/breachedaccount/{quote(account, safe='')}"
-        async with httpx.AsyncClient(timeout=self.timeout, headers=headers) as client:
-            response = await client.get(url, params={"truncateResponse": "false"})
+    async def xposed_account(self, account: str) -> list[str]:
+        account = account.strip()
+        if not account or "@" not in account:
+            raise ValueError("XposedOrNot breach lookup requires an email address")
+        headers = {"User-Agent": settings.user_agent}
+        url = f"https://api.xposedornot.com/v1/check-email/{quote(account, safe='')}"
+        async with httpx.AsyncClient(timeout=self.timeout, headers=headers, follow_redirects=True) as client:
+            response = await client.get(url, params={"details": "false"})
             if response.status_code == 404:
                 return []
             response.raise_for_status()
-            return response.json()
+            data = response.json()
+            if data.get("Error"):
+                return []
+            breaches = data.get("breaches", [])
+            if breaches and isinstance(breaches[0], list):
+                breaches = breaches[0]
+            return [str(item) for item in breaches if item]
 
     async def virustotal_lookup(self, value: str) -> dict:
         if not settings.virustotal_api_key:
