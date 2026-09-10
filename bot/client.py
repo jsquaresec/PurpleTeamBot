@@ -167,32 +167,46 @@ class PurpleTeamBot(commands.Bot):
                     panel.add_field(name=key.replace('_', ' ').title(), value=str(value)[:1024], inline=True)
             await interaction.followup.send(embed=panel)
 
-        @person.command(name="search", description="Admin-only Enformion/public-source person search")
+        @person.command(name="search", description="Admin-only People Data Labs person enrichment")
         async def person_search(interaction: discord.Interaction, first_name: str, last_name: str, city: str = "", state: str = "", email: str = "", phone: str = ""):
             gid = guild_id(interaction)
             if not can_use_person_search(interaction):
                 await interaction.response.send_message(embed=embed("Access Denied", "You need **Manage Server** permission to use person intelligence.", kind="error"), ephemeral=True)
                 return
+            if not (city or state or email or phone):
+                await interaction.response.send_message(embed=embed("More Information Required", "People Data Labs requires a location, email, or phone identifier in addition to a first and last name. Add at least one of `city`, `state`, `email`, or `phone`.", kind="warning"), ephemeral=True)
+                return
             await interaction.response.defer(thinking=True, ephemeral=True)
-            payload = {"FirstName": first_name.strip(), "LastName": last_name.strip(), "Page": 1, "ResultsPerPage": 10}
-            if city or state:
-                payload["Addresses"] = [{"AddressLine2": f"{city}, {state}".strip(", ")}]
-            if email:
-                payload["Email"] = email.strip()
-            if phone:
-                payload["Phone"] = phone.strip()
             await record_audit(gid, interaction.user.id, "person.search", f"{first_name} {last_name}", f"city={city};state={state};email_supplied={bool(email)};phone_supplied={bool(phone)}")
             try:
-                data = await integrations.enformion_person_search(payload)
-                if isinstance(data, dict):
-                    candidates = data.get("Persons") or data.get("Results") or data.get("persons") or []
-                    count = len(candidates) if isinstance(candidates, list) else "Available"
-                else:
-                    count = "Available"
-                panel = embed("Person Intelligence", "Permission-gated EnformionGO search completed.", kind="success")
+                data = await integrations.pdl_person_enrich(
+                    first_name=first_name.strip(),
+                    last_name=last_name.strip(),
+                    locality=city.strip(),
+                    region=state.strip(),
+                    email=email.strip(),
+                    phone=phone.strip(),
+                )
+                found = bool(data.get("found"))
+                record = data.get("data", {}) if found else {}
+                panel = embed("Person Intelligence", "Permission-gated People Data Labs enrichment completed.", kind="success" if found else "warning")
                 panel.add_field(name="👤 Query", value=f"**{first_name} {last_name}**", inline=True)
-                panel.add_field(name="🔎 Candidate Results", value=str(count), inline=True)
-                panel.add_field(name="🔒 Privacy", value="Detailed provider records are intentionally not posted into public Discord channels.", inline=False)
+                panel.add_field(name="🔎 Match", value="Found" if found else "No match returned", inline=True)
+                if found:
+                    safe_fields = {
+                        "Full Name": record.get("full_name"),
+                        "Headline": record.get("headline"),
+                        "Industry": record.get("industry"),
+                        "Job Title": record.get("job_title"),
+                        "Company": record.get("job_company_name"),
+                        "Location": record.get("location_name"),
+                        "GitHub": record.get("github_url"),
+                        "LinkedIn": record.get("linkedin_url"),
+                    }
+                    details = "\n".join(f"**{k}:** {v}" for k, v in safe_fields.items() if v)
+                    if details:
+                        panel.add_field(name="📋 Public / Professional Profile", value=details[:1024], inline=False)
+                panel.add_field(name="🔒 Free Plan", value="Contact-data values are obscured by People Data Labs on the free plan. Purple Team does not attempt to bypass those limits.", inline=False)
                 await interaction.followup.send(embed=panel, ephemeral=True)
             except Exception as exc:
                 await interaction.followup.send(embed=embed("Person Search Failed", str(exc), kind="error"), ephemeral=True)
@@ -310,7 +324,7 @@ class PurpleTeamBot(commands.Bot):
             panel.add_field(
                 name="🌐 Configured Intelligence Providers",
                 value="\n".join([
-                    status_dot(bool(settings.enformion_ap_name and settings.enformion_ap_password), label="**EnformionGO**"),
+                    status_dot(bool(settings.pdl_api_key), label="**People Data Labs**"),
                     status_dot(bool(settings.virustotal_api_key), label="**VirusTotal**"),
                     status_dot(bool(settings.abuseipdb_api_key), label="**AbuseIPDB**"),
                     status_dot(bool(settings.censys_pat), label="**Censys**"),
