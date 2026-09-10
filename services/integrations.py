@@ -11,34 +11,46 @@ class IntegrationService:
     def __init__(self) -> None:
         self.timeout = httpx.Timeout(settings.http_timeout_seconds)
 
-    async def _enformion(self, endpoint: str, search_type: str, payload: dict) -> dict:
-        if not settings.enformion_ap_name or not settings.enformion_ap_password:
-            raise RuntimeError("Enformion is not configured")
+    async def pdl_person_enrich(self, **params) -> dict:
+        if not settings.pdl_api_key:
+            raise RuntimeError("People Data Labs is not configured")
+
+        payload = {k: v for k, v in params.items() if v not in (None, "", [], {})}
         headers = {
-            "galaxy-ap-name": settings.enformion_ap_name,
-            "galaxy-ap-password": settings.enformion_ap_password,
-            "galaxy-search-type": search_type,
+            "X-Api-Key": settings.pdl_api_key,
+            "Content-Type": "application/json",
             "User-Agent": settings.user_agent,
         }
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(endpoint, json=payload, headers=headers)
+        async with httpx.AsyncClient(timeout=self.timeout, headers=headers) as client:
+            response = await client.post(settings.pdl_base_url, json=payload)
+            if response.status_code == 404:
+                return {"found": False}
             response.raise_for_status()
-            return response.json()
+            data = response.json()
+            return {"found": True, "data": data.get("data", data), "status": data.get("status")}
 
+    # Compatibility wrappers for existing command code while the UI labels are migrated.
+    # These now use People Data Labs; Enformion is not contacted.
     async def enformion_person_search(self, payload: dict) -> dict:
-        return await self._enformion(settings.enformion_base_url, settings.enformion_search_type, payload)
+        params = {
+            "first_name": payload.get("FirstName"),
+            "last_name": payload.get("LastName"),
+            "email": payload.get("Email"),
+            "phone": payload.get("Phone"),
+        }
+        addresses = payload.get("Addresses") or []
+        if addresses and isinstance(addresses[0], dict):
+            params["location"] = addresses[0].get("AddressLine2")
+        return await self.pdl_person_enrich(**params)
 
     async def enformion_phone(self, phone: str) -> dict:
-        return await self._enformion("https://devapi.enformion.com/Phone/Enrich", "DevAPICallerID", {"Phone": phone})
+        return await self.pdl_person_enrich(phone=phone)
 
     async def enformion_email(self, email: str) -> dict:
-        return await self._enformion("https://devapi.enformion.com/Email/Id", "DevAPIEmailID", {"Email": email})
+        return await self.pdl_person_enrich(email=email)
 
     async def enformion_address(self, address_line1: str, address_line2: str, exact_match: str = "") -> dict:
-        payload = {"addressline1": address_line1, "addressline2": address_line2}
-        if exact_match:
-            payload["ExactMatch"] = exact_match
-        return await self._enformion("https://devapi.enformion.com/Address/Id", "DevAPIAddressID", payload)
+        return await self.pdl_person_enrich(street_address=address_line1, location=address_line2)
 
     async def xposed_account(self, account: str) -> list[str]:
         account = account.strip()
