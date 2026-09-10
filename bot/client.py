@@ -178,9 +178,9 @@ class PurpleTeamBot(commands.Bot):
             if city or state:
                 payload["Addresses"] = [{"AddressLine2": f"{city}, {state}".strip(", ")}]
             if email:
-                payload["Emails"] = [email.strip()]
+                payload["Email"] = email.strip()
             if phone:
-                payload["PhoneNumbers"] = [phone.strip()]
+                payload["Phone"] = phone.strip()
             await record_audit(gid, interaction.user.id, "person.search", f"{first_name} {last_name}", f"city={city};state={state};email_supplied={bool(email)};phone_supplied={bool(phone)}")
             try:
                 data = await integrations.enformion_person_search(payload)
@@ -214,7 +214,7 @@ class PurpleTeamBot(commands.Bot):
             except Exception as exc:
                 await interaction.followup.send(embed=embed("Threat Intelligence Failed", str(exc), kind="error"), ephemeral=True)
 
-        @intel.command(name="breach", description="Check an account identifier for known breach exposure via HIBP")
+        @intel.command(name="breach", description="Check an email address for known breach exposure via XposedOrNot")
         async def intel_breach(interaction: discord.Interaction, account: str):
             gid = guild_id(interaction)
             if not can_use_person_search(interaction):
@@ -223,12 +223,11 @@ class PurpleTeamBot(commands.Bot):
             await interaction.response.defer(thinking=True, ephemeral=True)
             await record_audit(gid, interaction.user.id, "intel.breach", "redacted-account")
             try:
-                rows = await integrations.hibp_account(account)
-                names = [str(x.get("Name", "unknown")) for x in rows[:20]]
-                panel = embed("Breach Exposure", "Have I Been Pwned account exposure check.", kind="warning" if rows else "success")
-                panel.add_field(name="📊 Breaches Found", value=str(len(rows)), inline=True)
-                panel.add_field(name="🗂️ Breach Sources", value="\n".join(f"• {x}" for x in names) if names else "No breaches returned.", inline=False)
-                panel.add_field(name="🔒 Privacy", value="The queried account identifier is not displayed in this response.", inline=False)
+                names = await integrations.xposed_account(account)
+                panel = embed("Breach Exposure", "XposedOrNot free breach exposure check.", kind="warning" if names else "success")
+                panel.add_field(name="📊 Breaches Found", value=str(len(names)), inline=True)
+                panel.add_field(name="🗂️ Breach Sources", value="\n".join(f"• {x}" for x in names[:20]) if names else "No breaches returned.", inline=False)
+                panel.add_field(name="🔒 Privacy", value="The queried email address is not displayed in this response.", inline=False)
                 await interaction.followup.send(embed=panel, ephemeral=True)
             except Exception as exc:
                 await interaction.followup.send(embed=embed("Breach Lookup Failed", str(exc), kind="error"), ephemeral=True)
@@ -309,24 +308,30 @@ class PurpleTeamBot(commands.Bot):
             panel.add_field(name="⚙️ Runtime", value=f"Python  `{platform.python_version()}`\nWorker  `Online`", inline=True)
             panel.add_field(name="🎯 Assessment", value=f"Concurrent scans  `{settings.max_active_scans}`\nScope enforcement  `Enabled`", inline=True)
             panel.add_field(
-                name="🌐 Intelligence Providers",
+                name="🌐 Configured Intelligence Providers",
                 value="\n".join([
                     status_dot(bool(settings.enformion_ap_name and settings.enformion_ap_password), label="**EnformionGO**"),
                     status_dot(bool(settings.virustotal_api_key), label="**VirusTotal**"),
-                    status_dot(bool(settings.hibp_api_key), label="**Have I Been Pwned**"),
+                    status_dot(bool(settings.abuseipdb_api_key), label="**AbuseIPDB**"),
+                    status_dot(bool(settings.censys_pat), label="**Censys**"),
+                    status_dot(bool(settings.urlscan_api_key), label="**urlscan.io**"),
+                    status_dot(bool(settings.otx_api_key), label="**AlienVault OTX**"),
                 ]),
                 inline=False,
             )
             panel.add_field(
-                name="🧠 Built-in Intelligence",
+                name="🧠 Free / Built-in Intelligence",
                 value="\n".join([
+                    always_status("**XposedOrNot**"),
+                    always_status("**HIBP Pwned Passwords**"),
                     always_status("**FIRST EPSS**"),
                     always_status("**CISA KEV**"),
+                    always_status("**crt.sh / DNS / RDAP**"),
                     local_status("**Nmap Engine**"),
                 ]),
                 inline=False,
             )
-            panel.add_field(name="🛡️ Security Mode", value="Active scanning requires explicit server scope authorization. Person intelligence remains permission-gated and audited.", inline=False)
+            panel.add_field(name="🛡️ Security Mode", value="Active scanning requires explicit server scope authorization. Person and breach intelligence remain permission-gated and audited.", inline=False)
             await interaction.response.send_message(embed=panel, ephemeral=True)
 
         self.tree.add_command(scope)
