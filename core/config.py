@@ -22,10 +22,8 @@ class Settings:
     http_timeout_seconds: int = max(5, _int("HTTP_TIMEOUT_SECONDS", 12))
     user_agent: str = os.getenv("USER_AGENT", "PurpleTeamBot/0.1")
 
-    enformion_ap_name: str = os.getenv("ENFORMION_AP_NAME", "").strip()
-    enformion_ap_password: str = os.getenv("ENFORMION_AP_PASSWORD", "").strip()
-    enformion_search_type: str = os.getenv("ENFORMION_SEARCH_TYPE", "Person").strip()
-    enformion_base_url: str = os.getenv("ENFORMION_BASE_URL", "https://devapi.enformion.com/PersonSearch").strip()
+    pdl_api_key: str = os.getenv("PDL_API_KEY", "").strip()
+    pdl_base_url: str = os.getenv("PDL_BASE_URL", "https://api.peopledatalabs.com/v5/person/enrich").strip()
 
     virustotal_api_key: str = os.getenv("VIRUSTOTAL_API_KEY", "").strip()
     abuseipdb_api_key: str = os.getenv("ABUSEIPDB_API_KEY", "").strip()
