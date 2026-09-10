@@ -24,11 +24,13 @@ jobs:
           python - <<'PY'
           import bot.client
           import bot.extra_commands
+          import bot.provider_commands
           import core.config
           import services.analyzers
           import services.integrations
           import services.nmap_service
           import services.passive_service
+          import services.reputation
           import services.tls_service
           import storage.db
           print('PurpleTeamBot imports OK')
