@@ -11,46 +11,37 @@ class IntegrationService:
     def __init__(self) -> None:
         self.timeout = httpx.Timeout(settings.http_timeout_seconds)
 
-    async def pdl_person_enrich(self, **params) -> dict:
-        if not settings.pdl_api_key:
-            raise RuntimeError("People Data Labs is not configured")
-
-        payload = {k: v for k, v in params.items() if v not in (None, "", [], {})}
+    async def digital_footprint_lookup(self, query: str) -> dict:
+        if not settings.digital_footprint_api_key:
+            raise RuntimeError("Digital Footprint is not configured")
+        query = query.strip()
+        if not query:
+            raise ValueError("A query is required")
         headers = {
-            "X-Api-Key": settings.pdl_api_key,
+            "Authorization": f"Bearer {settings.digital_footprint_api_key}",
             "Content-Type": "application/json",
             "User-Agent": settings.user_agent,
         }
         async with httpx.AsyncClient(timeout=self.timeout, headers=headers) as client:
-            response = await client.post(settings.pdl_base_url, json=payload)
-            if response.status_code == 404:
-                return {"found": False}
+            response = await client.post(
+                settings.digital_footprint_base_url,
+                params={"wait": "true"},
+                json={"query": query},
+            )
             response.raise_for_status()
-            data = response.json()
-            return {"found": True, "data": data.get("data", data), "status": data.get("status")}
+            return response.json()
 
-    # Compatibility wrappers for existing command code while the UI labels are migrated.
-    # These now use People Data Labs; Enformion is not contacted.
-    async def enformion_person_search(self, payload: dict) -> dict:
-        params = {
-            "first_name": payload.get("FirstName"),
-            "last_name": payload.get("LastName"),
-            "email": payload.get("Email"),
-            "phone": payload.get("Phone"),
-        }
-        addresses = payload.get("Addresses") or []
-        if addresses and isinstance(addresses[0], dict):
-            params["location"] = addresses[0].get("AddressLine2")
-        return await self.pdl_person_enrich(**params)
-
-    async def enformion_phone(self, phone: str) -> dict:
-        return await self.pdl_person_enrich(phone=phone)
-
-    async def enformion_email(self, email: str) -> dict:
-        return await self.pdl_person_enrich(email=email)
-
-    async def enformion_address(self, address_line1: str, address_line2: str, exact_match: str = "") -> dict:
-        return await self.pdl_person_enrich(street_address=address_line1, location=address_line2)
+    async def usa_caller_lookup(self, phone: str) -> dict:
+        phone = phone.strip()
+        if not phone:
+            raise ValueError("A phone number is required")
+        url = f"https://www.usacallerlookup.com/wp-json/ucl/v1/number/{quote(phone, safe='')}"
+        async with httpx.AsyncClient(timeout=self.timeout, headers={"User-Agent": settings.user_agent}) as client:
+            response = await client.get(url)
+            if response.status_code == 400:
+                raise ValueError("USACallerLookup requires a valid 10-digit US phone number")
+            response.raise_for_status()
+            return response.json()
 
     async def xposed_account(self, account: str) -> list[str]:
         account = account.strip()
