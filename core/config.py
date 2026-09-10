@@ -22,15 +22,11 @@ class Settings:
     http_timeout_seconds: int = max(5, _int("HTTP_TIMEOUT_SECONDS", 12))
     user_agent: str = os.getenv("USER_AGENT", "PurpleTeamBot/0.1")
 
-    pdl_api_key: str = os.getenv("PDL_API_KEY", "").strip()
-    pdl_base_url: str = os.getenv("PDL_BASE_URL", "https://api.peopledatalabs.com/v5/person/enrich").strip()
-
-    # Temporary compatibility aliases used by older command modules during the PDL migration.
-    # No Enformion credentials are read or required.
-    enformion_ap_name: str = os.getenv("PDL_API_KEY", "").strip()
-    enformion_ap_password: str = os.getenv("PDL_API_KEY", "").strip()
-    enformion_search_type: str = "PDL"
-    enformion_base_url: str = os.getenv("PDL_BASE_URL", "https://api.peopledatalabs.com/v5/person/enrich").strip()
+    digital_footprint_api_key: str = os.getenv("DIGITAL_FOOTPRINT_API_KEY", "").strip()
+    digital_footprint_base_url: str = os.getenv(
+        "DIGITAL_FOOTPRINT_BASE_URL",
+        "https://api.digifootprint.dev/v1/lookup",
+    ).strip()
 
     virustotal_api_key: str = os.getenv("VIRUSTOTAL_API_KEY", "").strip()
     abuseipdb_api_key: str = os.getenv("ABUSEIPDB_API_KEY", "").strip()
