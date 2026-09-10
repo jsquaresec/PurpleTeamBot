@@ -1,0 +1,24 @@
+[Unit]
+Description=PurpleTeamBot Discord Security Operations Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=purpleteam
+Group=purpleteam
+WorkingDirectory=/opt/PurpleTeamBot
+EnvironmentFile=/opt/PurpleTeamBot/.env
+ExecStart=/opt/PurpleTeamBot/.venv/bin/python /opt/PurpleTeamBot/main.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/PurpleTeamBot
+MemoryMax=700M
+CPUQuota=90%
+
+[Install]
+WantedBy=multi-user.target
