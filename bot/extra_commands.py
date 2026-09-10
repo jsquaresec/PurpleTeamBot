@@ -31,46 +31,99 @@ def _privileged(interaction: discord.Interaction) -> bool:
     return isinstance(interaction.user, discord.Member) and interaction.user.guild_permissions.manage_guild
 
 
-async def _reverse_result(interaction: discord.Interaction, action: str, label: str, func) -> None:
+def _compact_json(data: object) -> str:
+    return json.dumps(data, indent=2, ensure_ascii=False)[:900]
+
+
+def _footprint_summary(data: dict) -> str:
+    lines = []
+    for key, label in (
+        ("queryType", "Type"),
+        ("matches", "Matches"),
+        ("socialMatches", "Social Matches"),
+        ("derivedMatches", "Derived Matches"),
+    ):
+        value = data.get(key)
+        if value is not None:
+            lines.append(f"**{label}:** {value}")
+    breaches = data.get("breaches") or []
+    if isinstance(breaches, list):
+        lines.append(f"**Breaches:** {len(breaches)}")
+    mentions = data.get("webMentions") or []
+    if isinstance(mentions, list):
+        lines.append(f"**Web Mentions:** {len(mentions)}")
+    return "\n".join(lines) or "Lookup completed."
+
+
+async def _check_privileged(interaction: discord.Interaction, action: str) -> bool:
     if not _privileged(interaction):
-        await interaction.response.send_message(embed=_embed("Access Denied", "You need **Manage Server** permission for person intelligence.", kind="error"), ephemeral=True)
-        return
-    gid = _guild_id(interaction)
-    await interaction.response.defer(thinking=True, ephemeral=True)
-    await record_audit(gid, interaction.user.id, action, "redacted")
-    try:
-        result = await func()
-        found = bool(result.get("found")) if isinstance(result, dict) else bool(result)
-        panel = _embed(label, "Permission-gated People Data Labs lookup completed.", kind="success" if found else "warning")
-        panel.add_field(name="🔎 Match Status", value="**Match found**" if found else "No match returned", inline=False)
-        panel.add_field(name="🔒 Free Plan", value="People Data Labs obscures contact-data values on the free plan. Purple Team uses supplied identifiers for matching but does not expose hidden contact fields.", inline=False)
-        panel.add_field(name="🛡️ Privacy", value="Detailed provider records are intentionally not posted into Discord channels.", inline=False)
-        await interaction.followup.send(embed=panel, ephemeral=True)
-    except Exception as exc:
-        await interaction.followup.send(embed=_embed(f"{label} Failed", str(exc), kind="error"), ephemeral=True)
+        await interaction.response.send_message(
+            embed=_embed("Access Denied", "You need **Manage Server** permission for person intelligence.", kind="error"),
+            ephemeral=True,
+        )
+        return False
+    await record_audit(_guild_id(interaction), interaction.user.id, action, "redacted")
+    return True
 
 
 def register_extra_commands(bot) -> None:
-    reverse = app_commands.Group(name="reverse", description="Permission-gated person identifier intelligence")
+    reverse = app_commands.Group(name="reverse", description="Permission-gated identifier intelligence")
     analyze = app_commands.Group(name="analyze", description="Defensive file and email analysis")
     recon = app_commands.Group(name="recon", description="Lightweight passive reconnaissance")
 
-    @reverse.command(name="phone", description="Match a phone identifier through People Data Labs")
+    @reverse.command(name="phone", description="US phone carrier/location/complaint intelligence")
     async def reverse_phone(interaction: discord.Interaction, phone: str):
-        await _reverse_result(interaction, "person.phone", "Reverse Phone", lambda: integrations.pdl_person_enrich(phone=phone))
+        if not await _check_privileged(interaction, "person.phone"):
+            return
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        try:
+            caller = await integrations.usa_caller_lookup(phone)
+            panel = _embed("Reverse Phone Intelligence", "USACallerLookup public-data lookup completed.", kind="info")
+            panel.add_field(name="📞 USACallerLookup", value=f"```json\n{_compact_json(caller)}\n```", inline=False)
+            if settings.digital_footprint_api_key:
+                try:
+                    footprint = await integrations.digital_footprint_lookup(phone)
+                    panel.add_field(name="🌐 Digital Footprint", value=_footprint_summary(footprint)[:1024], inline=False)
+                except Exception as exc:
+                    panel.add_field(name="⚠️ Digital Footprint", value=str(exc)[:1024], inline=False)
+            panel.add_field(name="ℹ️ Data Note", value="Complaint data can reflect spoofed caller ID and is not proof of wrongdoing.", inline=False)
+            await interaction.followup.send(embed=panel, ephemeral=True)
+        except Exception as exc:
+            await interaction.followup.send(embed=_embed("Reverse Phone Failed", str(exc), kind="error"), ephemeral=True)
 
-    @reverse.command(name="email", description="Match an email identifier through People Data Labs")
+    @reverse.command(name="email", description="Email footprint, breach, and public-web intelligence")
     async def reverse_email(interaction: discord.Interaction, email: str):
-        await _reverse_result(interaction, "person.email", "Reverse Email", lambda: integrations.pdl_person_enrich(email=email))
+        if not await _check_privileged(interaction, "person.email"):
+            return
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        try:
+            footprint = await integrations.digital_footprint_lookup(email)
+            panel = _embed("Reverse Email Intelligence", "Digital Footprint identifier lookup completed.", kind="info")
+            panel.add_field(name="🌐 Footprint Summary", value=_footprint_summary(footprint)[:1024], inline=False)
+            results = footprint.get("results") or []
+            matches = []
+            if isinstance(results, list):
+                for item in results:
+                    if isinstance(item, dict) and item.get("registered") is True:
+                        matches.append(str(item.get("platform") or item.get("name") or "unknown"))
+            if matches:
+                panel.add_field(name="🔗 Verified Platforms", value="\n".join(f"• {x}" for x in matches[:30])[:1024], inline=False)
+            await interaction.followup.send(embed=panel, ephemeral=True)
+        except Exception as exc:
+            await interaction.followup.send(embed=_embed("Reverse Email Failed", str(exc), kind="error"), ephemeral=True)
 
-    @reverse.command(name="address", description="Match a person from address information through People Data Labs")
-    async def reverse_address(interaction: discord.Interaction, street: str, city_state_zip: str):
-        await _reverse_result(
-            interaction,
-            "person.address",
-            "Address Intelligence",
-            lambda: integrations.pdl_person_enrich(street_address=street, location=city_state_zip),
-        )
+    @reverse.command(name="username", description="Check a username across public platforms")
+    async def reverse_username(interaction: discord.Interaction, username: str):
+        if not await _check_privileged(interaction, "person.username"):
+            return
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        try:
+            footprint = await integrations.digital_footprint_lookup(username)
+            panel = _embed("Username Footprint", "Digital Footprint username lookup completed.", kind="info")
+            panel.add_field(name="🌐 Footprint Summary", value=_footprint_summary(footprint)[:1024], inline=False)
+            await interaction.followup.send(embed=panel, ephemeral=True)
+        except Exception as exc:
+            await interaction.followup.send(embed=_embed("Username Footprint Failed", str(exc), kind="error"), ephemeral=True)
 
     @analyze.command(name="file", description="Hash a small uploaded file and optionally check its SHA-256 in VirusTotal")
     async def analyze_file(interaction: discord.Interaction, attachment: discord.Attachment, virustotal: bool = True):
