@@ -19,49 +19,52 @@ Lightweight Discord-based security operations, OSINT, vulnerability intelligence
 
 ---
 
-Purple Team is a lightweight security-operations Discord bot that combines public-source OSINT, threat intelligence, vulnerability prioritization, defensive analysis, person intelligence, and authorized reconnaissance in one platform. The project is intentionally designed to stay efficient: async I/O, SQLite, conservative scan concurrency, compact Nmap jobs, remote intelligence APIs, and no heavyweight local vulnerability databases.
+Purple Team is a lightweight security-operations Discord bot combining public-source OSINT, threat intelligence, vulnerability prioritization, defensive analysis, person intelligence, and authorized reconnaissance in one platform. It is designed to stay efficient through async I/O, conservative scan concurrency, compact Nmap jobs, remote intelligence APIs, and no heavyweight local vulnerability databases.
 
 ## OSINT and passive reconnaissance
 
 - DNS A / AAAA / MX / NS / TXT intelligence
 - RDAP domain and IP registration data
 - reverse DNS / PTR correlation
-- Certificate Transparency discovery
-- SecurityTrails passive subdomain discovery
+- Certificate Transparency discovery through crt.sh
 - public username correlation across GitHub, GitLab, Reddit, Keybase, and HackerOne
 - GitHub public profile intelligence
 - email-domain posture checks
-- SPF discovery
-- DMARC discovery
+- SPF and DMARC discovery
 - DNSSEC DNSKEY observation
 - HTTP response and redirect intelligence
 - server-header and X-Powered-By exposure checks
 - web technology fingerprinting
 - TLS certificate, protocol, cipher, expiry, issuer, subject, and SAN inspection
 - public person / identifier correlation
+- urlscan.io web intelligence
+- AlienVault OTX IOC enrichment
 
 ## Person intelligence
 
-- EnformionGO Person Search
-- EnformionGO reverse phone
-- EnformionGO reverse email
-- EnformionGO address intelligence
+- People Data Labs person enrichment
+- People Data Labs phone-identifier matching
+- People Data Labs email-identifier matching
+- People Data Labs address-based matching
+- XposedOrNot email breach exposure
+- HIBP Pwned Passwords k-anonymity checks
 - public username/profile correlation
-- HIBP breach-exposure lookup
 - email-domain correlation
 - public-source enrichment
 
-Person-data commands are permission-gated, return ephemerally, and are audit logged. Rich provider records are not posted into public Discord channels.
+Person-data commands are permission-gated, return ephemerally, and are audit logged. People Data Labs obscures contact-data values on its free plan; Purple Team respects those limits and does not attempt to bypass them.
 
 ## Threat and vulnerability intelligence
 
-- VirusTotal domain, IP, URL/file-hash reputation workflows
+- VirusTotal domain, IP, and file-hash reputation workflows
 - AbuseIPDB IP reputation
-- Shodan host intelligence
+- Censys host and exposure intelligence
+- urlscan.io web intelligence
+- AlienVault OTX IOC intelligence
+- XposedOrNot breach exposure
 - CVE.org CVE records
 - FIRST EPSS exploitation probability and percentile
 - CISA Known Exploited Vulnerabilities correlation
-- HIBP breach exposure
 - software/version review from service fingerprints
 - known-exploited prioritization for remediation
 
@@ -104,7 +107,7 @@ Exposure checks only collect response status and metadata; they do not dump disc
 
 ## Investigation workflow
 
-`/investigate <target>` combines passive and authorized active intelligence into a single workflow. It currently includes DNS, Certificate Transparency, HTTP/security-header analysis, and a lightweight Nmap pass when the target is in scope. Additional correlation modules can continue to plug into this workflow without turning the Discord process into a heavyweight scanner.
+`/investigate <target>` combines passive and authorized active intelligence into a single workflow. It currently includes DNS, Certificate Transparency, HTTP/security-header analysis, and a lightweight Nmap pass when the target is in scope.
 
 ## Commands
 
@@ -133,11 +136,12 @@ Exposure checks only collect response status and metadata; they do not dump disc
 /reverse address <street> <city_state_zip>
 
 /intel lookup <domain|ip|hash>
-/intel breach <account>
+/intel breach <email>
 
 /reputation abuseipdb <ip>
-/reputation shodan <ip>
-/passive subdomains <domain>
+/reputation censys <ip>
+/reputation otx <indicator>
+/passive urlscan <domain>
 
 /vuln cve <CVE-ID>
 
@@ -158,7 +162,7 @@ Exposure checks only collect response status and metadata; they do not dump disc
 
 ## Lightweight by design
 
-- SQLite instead of requiring a separate database server.
+- SQLite by default with a planned PostgreSQL/Neon migration path.
 - Async HTTP and DNS operations.
 - Remote CVE, breach, reputation, and OSINT intelligence instead of large local datasets.
 - Conservative Nmap concurrency and scan timeouts.
@@ -178,7 +182,7 @@ Exposure checks only collect response status and metadata; they do not dump disc
 git clone https://github.com/jsquaresec/PurpleTeamBot.git
 cd PurpleTeamBot
 sudo bash deploy/install.sh
-sudo nano /opt/PurpleTeamBot/.env
+sudo micro /opt/PurpleTeamBot/.env
 sudo systemctl restart purpleteambot
 sudo systemctl status purpleteambot
 ```
@@ -202,25 +206,28 @@ python main.py
 DISCORD_TOKEN=
 DISCORD_GUILD_ID=
 BOT_OWNER_ID=
+
 DATABASE_PATH=purple_team.db
+DATABASE_URL=
+
 MAX_ACTIVE_SCANS=1
 SCAN_TIMEOUT_SECONDS=90
 HTTP_TIMEOUT_SECONDS=12
 USER_AGENT=PurpleTeamBot/0.1
 
-ENFORMION_AP_NAME=
-ENFORMION_AP_PASSWORD=
-ENFORMION_SEARCH_TYPE=Person
-ENFORMION_BASE_URL=https://devapi.enformion.com/PersonSearch
+PDL_API_KEY=
+PDL_BASE_URL=https://api.peopledatalabs.com/v5/person/enrich
 
 VIRUSTOTAL_API_KEY=
-HIBP_API_KEY=
-SHODAN_API_KEY=
 ABUSEIPDB_API_KEY=
-SECURITYTRAILS_API_KEY=
+CENSYS_PAT=
+URLSCAN_API_KEY=
+OTX_API_KEY=
 ```
 
-Only `DISCORD_TOKEN` is mandatory. Provider-backed commands report when an integration is not configured. FIRST EPSS, CISA KEV, RDAP, Certificate Transparency, DNS, reverse DNS, email-domain posture, and basic HTTP/TLS checks do not require private API credentials.
+Only `DISCORD_TOKEN` is mandatory. Provider-backed commands report when an integration is not configured. XposedOrNot, HIBP Pwned Passwords, FIRST EPSS, CISA KEV, RDAP, Certificate Transparency, DNS, reverse DNS, email-domain posture, and basic HTTP/TLS checks do not require paid API credentials.
+
+The project intentionally does not require EnformionGO, the paid HIBP account API, Shodan, or SecurityTrails.
 
 `DISCORD_GUILD_ID` is optional but useful during development because commands can sync directly to a test server.
 
