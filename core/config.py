@@ -30,6 +30,8 @@ class Settings:
         "https://devapi.enformion.com/PersonSearch",
     ).strip()
 
+    personpages_api_key: str = os.getenv("PERSONPAGES_API_KEY", "").strip()
+
     virustotal_api_key: str = os.getenv("VIRUSTOTAL_API_KEY", "").strip()
     abuseipdb_api_key: str = os.getenv("ABUSEIPDB_API_KEY", "").strip()
     censys_pat: str = os.getenv("CENSYS_PAT", "").strip()
