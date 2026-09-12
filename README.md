@@ -105,6 +105,14 @@ Exposure checks only collect response status and metadata; they do not dump disc
 - IOC lookup for IPs, domains, URLs, and hashes through configured providers
 - investigation history and audit logging
 
+## Daily snapshot
+
+Purple Team generates a red / blue / purple / white operational snapshot PNG every day and posts it to the dedicated announcement channel. The card pulls live counts from the configured database, including authorized targets, scan totals, last-24-hour assessments, scan failures, successful scans, audit events, top activity, member count, and database status.
+
+The production announcement channel defaults to `1547422897054818355`. It is outbound-only: slash commands remain restricted to the configured command-channel allowlist. The default schedule is 08:00 `America/Chicago` and can be changed with `SNAPSHOT_TIMEZONE`, `SNAPSHOT_HOUR`, and `SNAPSHOT_MINUTE`.
+
+Manage Server users can run `/snapshot post` from an approved command channel to generate and post the snapshot immediately for testing.
+
 ## Investigation workflow
 
 `/investigate <target>` combines passive and authorized active intelligence into a single workflow. It includes DNS, Certificate Transparency, HTTP/security-header analysis, and a lightweight Nmap pass when the target is in scope.
@@ -159,6 +167,7 @@ Exposure checks only collect response status and metadata; they do not dump disc
 /investigate <target>
 /history
 /status
+/snapshot post
 ```
 
 ## Lightweight by design
@@ -208,7 +217,11 @@ python main.py
 DISCORD_TOKEN=
 DISCORD_GUILD_ID=
 BOT_OWNER_ID=
-DISCORD_ALLOWED_CHANNEL_IDS=
+DISCORD_ALLOWED_CHANNEL_IDS=1547700463611289640,1548426555934376096,1548416136436129983,1548426462120386672,1548437367331881030
+DISCORD_SNAPSHOT_CHANNEL_ID=1547422897054818355
+SNAPSHOT_TIMEZONE=America/Chicago
+SNAPSHOT_HOUR=8
+SNAPSHOT_MINUTE=0
 
 DATABASE_PATH=purple_team.db
 DATABASE_URL=
@@ -230,13 +243,11 @@ URLSCAN_API_KEY=
 OTX_API_KEY=
 ```
 
-`DISCORD_ALLOWED_CHANNEL_IDS` is a comma-separated allowlist of Discord channel IDs. Purple Team applies this as a global application-command guard, so every current and future slash command is rejected outside those channels. The guard fails closed: if the setting is blank, application commands are denied until approved channels are configured.
-
-EnformionGO credentials enable the richer person/reverse intelligence layer. XposedOrNot, HIBP Pwned Passwords, FIRST EPSS, CISA KEV, RDAP, Certificate Transparency, DNS, reverse DNS, email-domain posture, and basic HTTP/TLS checks do not require paid API credentials.
+Only `DISCORD_TOKEN` is mandatory for the base bot. EnformionGO credentials enable the richer person/reverse intelligence layer. XposedOrNot, HIBP Pwned Passwords, FIRST EPSS, CISA KEV, RDAP, Certificate Transparency, DNS, reverse DNS, email-domain posture, and basic HTTP/TLS checks do not require paid API credentials.
 
 If `DATABASE_URL` is blank, Purple Team uses SQLite. If a PostgreSQL/Neon connection string is supplied, the bot automatically initializes and uses PostgreSQL instead.
 
-`DISCORD_GUILD_ID` is optional but useful during development because commands can sync directly to a test server. When it is configured, the channel guard also rejects command execution from other guilds.
+`DISCORD_GUILD_ID` is optional but useful during development because commands can sync directly to a test server.
 
 ## Authorized-use model
 
