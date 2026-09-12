@@ -1,4 +1,6 @@
+import asyncio
 import json
+import re
 from urllib.parse import quote
 
 import discord
@@ -126,6 +128,55 @@ async def _gitlab_people(first_name: str, last_name: str) -> list[dict]:
         ]
 
 
+def _username_variants(first_name: str, last_name: str, email: str = "") -> list[str]:
+    first = re.sub(r"[^a-z0-9]", "", first_name.lower())
+    last = re.sub(r"[^a-z0-9]", "", last_name.lower())
+    variants = []
+    for value in (
+        f"{first}{last}",
+        f"{first}.{last}",
+        f"{first}_{last}",
+        f"{first}-{last}",
+        f"{first[:1]}{last}" if first else "",
+        f"{first}{last[:1]}" if last else "",
+        f"{last}{first}",
+    ):
+        if value and 2 <= len(value) <= 64 and value not in variants:
+            variants.append(value)
+    if email and "@" in email:
+        local = re.sub(r"[^a-z0-9._-]", "", email.split("@", 1)[0].lower())
+        if local and local not in variants:
+            variants.insert(0, local)
+    return variants[:6]
+
+
+async def _cross_platform_candidates(first_name: str, last_name: str, email: str = "") -> list[dict]:
+    variants = _username_variants(first_name, last_name, email)
+    if not variants:
+        return []
+
+    async def check(username: str) -> list[dict]:
+        rows = await advanced_osint.username_profiles(username)
+        return [
+            {"site": row["site"], "username": username, "url": row["url"]}
+            for row in rows
+            if row.get("present")
+        ]
+
+    batches = await asyncio.gather(*(check(username) for username in variants), return_exceptions=True)
+    found: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for batch in batches:
+        if isinstance(batch, Exception):
+            continue
+        for row in batch:
+            key = (row["site"], row["username"])
+            if key not in seen:
+                seen.add(key)
+                found.append(row)
+    return found[:15]
+
+
 def _phone_summary(data: dict) -> str:
     lines = []
     for key, label in (
@@ -152,7 +203,7 @@ def register_free_person_commands(bot) -> None:
     person = app_commands.Group(name="person", description="Permission-gated public-source person intelligence")
     reverse = app_commands.Group(name="reverse", description="Permission-gated public identifier intelligence")
 
-    @person.command(name="search", description="Public-source name, email, and phone correlation")
+    @person.command(name="search", description="Multi-source public name, email, phone, and profile correlation")
     async def person_search(
         interaction: discord.Interaction,
         first_name: str,
@@ -166,31 +217,50 @@ def register_free_person_commands(bot) -> None:
             return
         await interaction.response.defer(thinking=True)
         try:
-            rows = await _github_people(first_name, last_name, city, state) + await _gitlab_people(first_name, last_name)
+            github_task = _github_people(first_name, last_name, city, state)
+            gitlab_task = _gitlab_people(first_name, last_name)
+            profile_task = _cross_platform_candidates(first_name, last_name, email)
+            github, gitlab, cross_profiles = await asyncio.gather(github_task, gitlab_task, profile_task)
+            rows = github + gitlab
+
             panel = _embed(
                 "Person Intelligence",
-                "Free public-source correlation completed. Results are leads for verification, not proof of identity.",
+                "Multi-source public correlation completed. Results are leads for verification, not proof of identity.",
                 kind="info",
             )
             panel.add_field(name="👤 Query", value=f"**{first_name.strip()} {last_name.strip()}**", inline=True)
             if city or state:
                 panel.add_field(name="📍 Location Filter", value=" ".join(x for x in (city.strip(), state.strip()) if x), inline=True)
-            profile_text = "\n".join(
+
+            directory_text = "\n".join(
                 f"• **{row['site']}** — {row['name']} (`{row['username']}`)"
                 + (f" — {row['location']}" if row.get("location") else "")
+                + (f" — {row['company']}" if row.get("company") else "")
                 + f"\n  {row['url']}"
                 for row in rows[:8]
             )
             panel.add_field(
-                name=f"🔎 Public Profile Candidates ({len(rows)})",
-                value=profile_text[:1024] or "No GitHub/GitLab candidates were returned.",
+                name=f"🔎 Name-Based Candidates ({len(rows)})",
+                value=directory_text[:1024] or "No GitHub/GitLab name matches were returned.",
                 inline=False,
             )
+
+            cross_text = "\n".join(
+                f"• **{row['site']}** — `{row['username']}`\n  {row['url']}"
+                for row in cross_profiles[:12]
+            )
+            panel.add_field(
+                name=f"🌐 Cross-Platform Profile Candidates ({len(cross_profiles)})",
+                value=cross_text[:1024] or "No derived username matches were confirmed across GitHub, GitLab, Reddit, Keybase, or HackerOne.",
+                inline=False,
+            )
+
             if phone.strip():
                 try:
                     panel.add_field(name="📞 USACallerLookup", value=_phone_summary(await _usa_caller_lookup(phone)), inline=False)
                 except Exception as exc:
                     panel.add_field(name="⚠️ Phone Context", value=str(exc)[:1024], inline=False)
+
             if email.strip():
                 try:
                     breaches = await _xposed_account(email)
@@ -207,7 +277,8 @@ def register_free_person_commands(bot) -> None:
                     )
                 except Exception as exc:
                     panel.add_field(name="⚠️ Email Context", value=str(exc)[:1024], inline=False)
-            panel.add_field(name="🔒 Safety", value="Permission-gated, audit logged, and limited to public/free sources.", inline=False)
+
+            panel.add_field(name="🛡️ Verification Note", value="Name and derived-username matches can belong to unrelated people. Verify using location, employer, bio, linked sites, and other independent context before treating a match as relevant.", inline=False)
             await interaction.followup.send(embed=panel)
         except Exception as exc:
             await interaction.followup.send(embed=_embed("Person Search Failed", str(exc), kind="error"))
@@ -294,8 +365,8 @@ def register_free_person_commands(bot) -> None:
             value="\n".join([
                 always_status("**USACallerLookup**"),
                 always_status("**XposedOrNot**"),
-                always_status("**GitHub / GitLab People Correlation**"),
-                always_status("**Public Username Correlation**"),
+                always_status("**GitHub / GitLab Name Search**"),
+                always_status("**GitHub / GitLab / Reddit / Keybase / HackerOne Profile Correlation**"),
                 always_status("**HIBP Pwned Passwords**"),
                 always_status("**FIRST EPSS**"),
                 always_status("**CISA KEV**"),
