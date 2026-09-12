@@ -11,37 +11,68 @@ class IntegrationService:
     def __init__(self) -> None:
         self.timeout = httpx.Timeout(settings.http_timeout_seconds)
 
-    async def digital_footprint_lookup(self, query: str) -> dict:
-        if not settings.digital_footprint_api_key:
-            raise RuntimeError("Digital Footprint is not configured")
-        query = query.strip()
-        if not query:
-            raise ValueError("A query is required")
+    async def _enformion(self, endpoint: str, search_type: str, payload: dict) -> dict:
+        if not settings.enformion_ap_name or not settings.enformion_ap_password:
+            raise RuntimeError("EnformionGO is not configured")
         headers = {
-            "Authorization": f"Bearer {settings.digital_footprint_api_key}",
-            "Content-Type": "application/json",
+            "galaxy-ap-name": settings.enformion_ap_name,
+            "galaxy-ap-password": settings.enformion_ap_password,
+            "galaxy-search-type": search_type,
             "User-Agent": settings.user_agent,
         }
         async with httpx.AsyncClient(timeout=self.timeout, headers=headers) as client:
-            response = await client.post(
-                settings.digital_footprint_base_url,
-                params={"wait": "true"},
-                json={"query": query},
-            )
+            response = await client.post(endpoint, json=payload)
             response.raise_for_status()
             return response.json()
 
-    async def usa_caller_lookup(self, phone: str) -> dict:
+    async def enformion_person_search(self, payload: dict) -> dict:
+        return await self._enformion(
+            settings.enformion_base_url,
+            settings.enformion_search_type,
+            payload,
+        )
+
+    async def enformion_phone(self, phone: str) -> dict:
         phone = phone.strip()
         if not phone:
             raise ValueError("A phone number is required")
-        url = f"https://www.usacallerlookup.com/wp-json/ucl/v1/number/{quote(phone, safe='')}"
-        async with httpx.AsyncClient(timeout=self.timeout, headers={"User-Agent": settings.user_agent}) as client:
-            response = await client.get(url)
-            if response.status_code == 400:
-                raise ValueError("USACallerLookup requires a valid 10-digit US phone number")
-            response.raise_for_status()
-            return response.json()
+        return await self._enformion(
+            "https://devapi.enformion.com/Phone/Enrich",
+            "DevAPICallerID",
+            {"Phone": phone},
+        )
+
+    async def enformion_email(self, email: str) -> dict:
+        email = email.strip()
+        if not email:
+            raise ValueError("An email address is required")
+        return await self._enformion(
+            "https://devapi.enformion.com/Email/Id",
+            "DevAPIEmailID",
+            {"Email": email},
+        )
+
+    async def enformion_address(self, address_line1: str, address_line2: str, exact_match: str = "") -> dict:
+        if not address_line1.strip() or not address_line2.strip():
+            raise ValueError("Both address lines are required")
+        payload = {
+            "addressline1": address_line1.strip(),
+            "addressline2": address_line2.strip(),
+        }
+        if exact_match:
+            payload["ExactMatch"] = exact_match
+        return await self._enformion(
+            "https://devapi.enformion.com/Address/Id",
+            "DevAPIAddressID",
+            payload,
+        )
+
+    async def enformion_contact_enrich(self, payload: dict) -> dict:
+        return await self._enformion(
+            "https://devapi.enformion.com/Contact/Enrich",
+            "DevAPIContactEnrich",
+            payload,
+        )
 
     async def xposed_account(self, account: str) -> list[str]:
         account = account.strip()
