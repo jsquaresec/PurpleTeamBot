@@ -10,6 +10,7 @@ from bot.provider_commands import register_provider_commands
 from bot.security_commands import register_security_commands
 from bot.threaded_intel_commands import register_threaded_intel_commands
 from bot.threaded_lookup_commands import register_threaded_lookup_commands
+from bot.threaded_remaining_commands import register_threaded_remaining_commands
 from bot.threaded_scan_osint_commands import register_threaded_scan_osint_commands
 from bot.you_person_commands import register_you_person_commands
 from core.config import settings
@@ -31,6 +32,7 @@ class FreeStackPurpleTeamBot(PurpleTeamBot):
         register_threaded_intel_commands(self)
         register_threaded_lookup_commands(self)
         register_threaded_scan_osint_commands(self)
+        register_threaded_remaining_commands(self)
 
         if settings.discord_guild_id:
             guild = discord.Object(id=settings.discord_guild_id)
