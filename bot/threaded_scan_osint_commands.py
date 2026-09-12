@@ -2,10 +2,11 @@ import discord
 from discord import app_commands
 
 from bot.threaded_intel_commands import _embed, _result_thread
+from core.config import settings
 from core.targets import normalize_target
 from services.nmap_service import nmap_service
 from services.passive_service import passive_service
-from storage.db import record_scan, target_in_scope
+from storage.db import add_scope, record_audit, record_scan, target_in_scope
 
 
 def _guild_id(interaction: discord.Interaction) -> int:
@@ -14,63 +15,89 @@ def _guild_id(interaction: discord.Interaction) -> int:
     return interaction.guild_id
 
 
+def _can_authorize(interaction: discord.Interaction) -> bool:
+    if interaction.user.id == settings.bot_owner_id:
+        return True
+    return isinstance(interaction.user, discord.Member) and interaction.user.guild_permissions.manage_guild
+
+
+async def _ensure_scan_scope(interaction: discord.Interaction, target: str, authorize: bool) -> tuple[int, str] | None:
+    gid = _guild_id(interaction)
+    target = normalize_target(target)
+    if await target_in_scope(gid, target):
+        return gid, target
+
+    if authorize and _can_authorize(interaction):
+        await add_scope(gid, target, interaction.user.id)
+        await record_audit(gid, interaction.user.id, "scope.add.scan", target, "authorized_inline=true")
+        return gid, target
+
+    message = (
+        f"This target is not in the server's authorized scope.\n\n🎯 Target: `{target}`\n\n"
+        "A server manager can rerun the scan with `authorize: True` to authorize and scan it in one step, "
+        "or use `/scope add` first."
+    )
+    if authorize and not _can_authorize(interaction):
+        message = "Only the bot owner or a member with **Manage Server** can authorize a new scan target."
+
+    await interaction.response.send_message(
+        embed=_embed("Assessment Blocked", message, kind="error"),
+        ephemeral=True,
+    )
+    return None
+
+
 def register_threaded_scan_osint_commands(bot) -> None:
-    # Replace the core scan/OSINT groups with thread-first versions.
     bot.tree.remove_command("scan")
     bot.tree.remove_command("osint")
 
     scan = app_commands.Group(name="scan", description="Authorized lightweight network scanning in threads")
     osint = app_commands.Group(name="osint", description="Passive OSINT with results organized in threads")
 
-    async def run_scan(interaction: discord.Interaction, target: str, service: bool) -> None:
-        gid = _guild_id(interaction)
-        target = normalize_target(target)
-        if not await target_in_scope(gid, target):
-            await interaction.response.send_message(
-                embed=_embed(
-                    "Assessment Blocked",
-                    f"This target is not in the server's authorized scope.\n\n🎯 Target: `{target}`\n\nUse `/scope add` before running active assessment commands.",
-                    kind="error",
-                ),
-                ephemeral=True,
-            )
+    async def run_scan(interaction: discord.Interaction, target: str, scan_type: str, authorize: bool) -> None:
+        scoped = await _ensure_scan_scope(interaction, target, authorize)
+        if not scoped:
             return
+        gid, target = scoped
+
+        runners = {
+            "quick": ("Quick", nmap_service.quick_scan),
+            "service": ("Service", nmap_service.service_scan),
+            "web": ("Web Surface", nmap_service.web_scan),
+            "infrastructure": ("Infrastructure", nmap_service.infrastructure_scan),
+            "database": ("Database / Data Service", nmap_service.database_scan),
+            "extended": ("Extended", nmap_service.extended_scan),
+        }
+        label, runner = runners[scan_type]
 
         await interaction.response.defer(thinking=True)
         thread = None
         try:
-            thread = await _result_thread(interaction, "service-scan" if service else "quick-scan")
+            thread = await _result_thread(interaction, f"{scan_type}-scan")
             await thread.send(
-                f"🛰️ **{'Service' if service else 'Quick'} scan started by {interaction.user.mention}**\n"
+                f"🛰️ **{label} scan started by {interaction.user.mention}**\n"
                 f"🎯 Target: `{target}`"
             )
-            result = await (nmap_service.service_scan(target) if service else nmap_service.quick_scan(target))
+            result = await runner(target)
             lines = [
                 f"`{p.port}/{p.protocol}`  •  **{p.service}**  {p.version}".strip()
                 for p in result.ports
             ]
             summary = "\n".join(lines) if lines else "No selected ports reported open."
-            scan_type = "service" if service else "quick"
             await record_scan(gid, interaction.user.id, target, scan_type, "ok", summary)
 
             panel = _embed(
-                "Service Scan Complete" if service else "Quick Scan Complete",
+                f"{label} Scan Complete",
                 "Authorized active assessment finished successfully.",
                 kind="success",
             )
             panel.add_field(name="🎯 Target", value=f"`{target}`", inline=True)
             panel.add_field(name="📡 Open Ports", value=str(len(result.ports)), inline=True)
+            panel.add_field(name="🧭 Preset", value=scan_type.title(), inline=True)
             panel.add_field(name="🔬 Results", value=summary[:1024], inline=False)
             await thread.send(embed=panel)
         except Exception as exc:
-            await record_scan(
-                gid,
-                interaction.user.id,
-                target,
-                "service" if service else "quick",
-                "error",
-                str(exc),
-            )
+            await record_scan(gid, interaction.user.id, target, scan_type, "error", str(exc))
             error = _embed(
                 "Scan Failed",
                 f"The assessment could not be completed.\n\n```text\n{str(exc)[:1200]}\n```",
@@ -81,13 +108,29 @@ def register_threaded_scan_osint_commands(bot) -> None:
             else:
                 await interaction.followup.send(embed=error)
 
-    @scan.command(name="quick", description="Scan a small high-value TCP port set in a results thread")
-    async def scan_quick(interaction: discord.Interaction, target: str):
-        await run_scan(interaction, target, False)
+    @scan.command(name="quick", description="Scan a compact high-value TCP port set")
+    async def scan_quick(interaction: discord.Interaction, target: str, authorize: bool = False):
+        await run_scan(interaction, target, "quick", authorize)
 
-    @scan.command(name="service", description="Run light service/version detection in a results thread")
-    async def scan_service(interaction: discord.Interaction, target: str):
-        await run_scan(interaction, target, True)
+    @scan.command(name="service", description="Run light service/version detection on common services")
+    async def scan_service(interaction: discord.Interaction, target: str, authorize: bool = False):
+        await run_scan(interaction, target, "service", authorize)
+
+    @scan.command(name="web", description="Scan common HTTP, HTTPS, proxy, and admin web ports")
+    async def scan_web(interaction: discord.Interaction, target: str, authorize: bool = False):
+        await run_scan(interaction, target, "web", authorize)
+
+    @scan.command(name="infrastructure", description="Scan common infrastructure and remote-management ports")
+    async def scan_infrastructure(interaction: discord.Interaction, target: str, authorize: bool = False):
+        await run_scan(interaction, target, "infrastructure", authorize)
+
+    @scan.command(name="database", description="Scan common database, cache, search, and data-service ports")
+    async def scan_database(interaction: discord.Interaction, target: str, authorize: bool = False):
+        await run_scan(interaction, target, "database", authorize)
+
+    @scan.command(name="extended", description="Run a broader curated TCP service scan")
+    async def scan_extended(interaction: discord.Interaction, target: str, authorize: bool = False):
+        await run_scan(interaction, target, "extended", authorize)
 
     @osint.command(name="dns", description="Query common DNS records in a results thread")
     async def osint_dns(interaction: discord.Interaction, domain: str):
