@@ -32,9 +32,18 @@ def _safe_thread_name(prefix: str, user: discord.abc.User) -> str:
     return f"{prefix}-{username}"[:90]
 
 
+async def _clear_deferred_response(interaction: discord.Interaction) -> None:
+    """Remove the temporary slash-command response after the results thread exists."""
+    try:
+        await interaction.delete_original_response()
+    except (discord.NotFound, discord.HTTPException):
+        pass
+
+
 async def _result_thread(interaction: discord.Interaction, prefix: str) -> discord.Thread:
     channel = interaction.channel
     if isinstance(channel, discord.Thread):
+        await _clear_deferred_response(interaction)
         return channel
     if not isinstance(channel, discord.TextChannel):
         raise RuntimeError("Run this command in a server text channel so Purple Team can create a results thread.")
@@ -45,7 +54,7 @@ async def _result_thread(interaction: discord.Interaction, prefix: str) -> disco
         auto_archive_duration=60,
         reason=f"Purple Team results for {interaction.user}",
     )
-    await interaction.followup.send(f"🧵 Results posted in {thread.mention}")
+    await _clear_deferred_response(interaction)
     return thread
 
 
@@ -80,8 +89,6 @@ async def _geoip_lookup(value: str) -> dict:
 
 
 def register_threaded_intel_commands(bot) -> None:
-    # Replace person/reverse with thread-first variants after all other command
-    # providers have registered their versions.
     bot.tree.remove_command("person")
     bot.tree.remove_command("reverse")
 
