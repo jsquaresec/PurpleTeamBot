@@ -5,6 +5,7 @@ import discord
 from bot.client import PurpleTeamBot
 from bot.extra_commands import register_extra_commands
 from bot.free_person_commands import register_free_person_commands
+from bot.personpages_person_commands import register_personpages_person_commands
 from bot.provider_commands import register_provider_commands
 from bot.security_commands import register_security_commands
 from core.config import settings
@@ -22,6 +23,7 @@ class FreeStackPurpleTeamBot(PurpleTeamBot):
             self.tree.remove_command(name)
 
         register_free_person_commands(self)
+        register_personpages_person_commands(self)
 
         if settings.discord_guild_id:
             guild = discord.Object(id=settings.discord_guild_id)
