@@ -2,6 +2,7 @@ import asyncio
 
 import discord
 
+from bot.channel_guard import install_channel_guard
 from bot.client import PurpleTeamBot
 from bot.extra_commands import register_extra_commands
 from bot.free_person_commands import register_free_person_commands
@@ -44,6 +45,7 @@ class FreeStackPurpleTeamBot(PurpleTeamBot):
 
 async def main() -> None:
     bot = FreeStackPurpleTeamBot()
+    install_channel_guard(bot)
     register_extra_commands(bot)
     register_provider_commands(bot)
     register_security_commands(bot)
