@@ -208,6 +208,7 @@ python main.py
 DISCORD_TOKEN=
 DISCORD_GUILD_ID=
 BOT_OWNER_ID=
+DISCORD_ALLOWED_CHANNEL_IDS=
 
 DATABASE_PATH=purple_team.db
 DATABASE_URL=
@@ -229,11 +230,13 @@ URLSCAN_API_KEY=
 OTX_API_KEY=
 ```
 
-Only `DISCORD_TOKEN` is mandatory for the base bot. EnformionGO credentials enable the richer person/reverse intelligence layer. XposedOrNot, HIBP Pwned Passwords, FIRST EPSS, CISA KEV, RDAP, Certificate Transparency, DNS, reverse DNS, email-domain posture, and basic HTTP/TLS checks do not require paid API credentials.
+`DISCORD_ALLOWED_CHANNEL_IDS` is a comma-separated allowlist of Discord channel IDs. Purple Team applies this as a global application-command guard, so every current and future slash command is rejected outside those channels. The guard fails closed: if the setting is blank, application commands are denied until approved channels are configured.
+
+EnformionGO credentials enable the richer person/reverse intelligence layer. XposedOrNot, HIBP Pwned Passwords, FIRST EPSS, CISA KEV, RDAP, Certificate Transparency, DNS, reverse DNS, email-domain posture, and basic HTTP/TLS checks do not require paid API credentials.
 
 If `DATABASE_URL` is blank, Purple Team uses SQLite. If a PostgreSQL/Neon connection string is supplied, the bot automatically initializes and uses PostgreSQL instead.
 
-`DISCORD_GUILD_ID` is optional but useful during development because commands can sync directly to a test server.
+`DISCORD_GUILD_ID` is optional but useful during development because commands can sync directly to a test server. When it is configured, the channel guard also rejects command execution from other guilds.
 
 ## Authorized-use model
 
