@@ -13,6 +13,7 @@ from services.nmap_service import nmap_service
 from services.passive_service import passive_service
 from storage.db import (
     add_scope,
+    database_status,
     init_db,
     list_scope,
     recent_history,
@@ -78,7 +79,14 @@ class PurpleTeamBot(commands.Bot):
             added = await add_scope(gid, target, interaction.user.id)
             await record_audit(gid, interaction.user.id, "scope.add", target)
             kind = "success" if added else "info"
-            await interaction.response.send_message(embed=embed("Authorized Scope", f"{'Target added to authorized scope.' if added else 'Target is already authorized.'}\n\n`{target}`", kind=kind), ephemeral=True)
+            await interaction.response.send_message(
+                embed=embed(
+                    "Authorized Scope",
+                    f"{'Target added to authorized scope.' if added else 'Target is already authorized.'}\n\n`{target}`",
+                    kind=kind,
+                ),
+                ephemeral=True,
+            )
 
         @scope.command(name="remove", description="Remove a target from authorized scope")
         @app_commands.default_permissions(manage_guild=True)
@@ -87,7 +95,14 @@ class PurpleTeamBot(commands.Bot):
             removed = await remove_scope(gid, target)
             await record_audit(gid, interaction.user.id, "scope.remove", target)
             kind = "success" if removed else "warning"
-            await interaction.response.send_message(embed=embed("Authorized Scope", f"{'Target removed from authorized scope.' if removed else 'Target was not found in authorized scope.'}\n\n`{target}`", kind=kind), ephemeral=True)
+            await interaction.response.send_message(
+                embed=embed(
+                    "Authorized Scope",
+                    f"{'Target removed from authorized scope.' if removed else 'Target was not found in authorized scope.'}\n\n`{target}`",
+                    kind=kind,
+                ),
+                ephemeral=True,
+            )
 
         @scope.command(name="list", description="List authorized active-scan targets")
         async def scope_list(interaction: discord.Interaction):
@@ -101,7 +116,14 @@ class PurpleTeamBot(commands.Bot):
             gid = guild_id(interaction)
             target = normalize_target(target)
             if not await target_in_scope(gid, target):
-                await interaction.response.send_message(embed=embed("Assessment Blocked", f"This target is not in the server's authorized scope.\n\n🎯 Target: `{target}`\n\nUse `/scope add` before running active assessment commands.", kind="error"), ephemeral=True)
+                await interaction.response.send_message(
+                    embed=embed(
+                        "Assessment Blocked",
+                        f"This target is not in the server's authorized scope.\n\n🎯 Target: `{target}`\n\nUse `/scope add` before running active assessment commands.",
+                        kind="error",
+                    ),
+                    ephemeral=True,
+                )
                 return
             await interaction.response.defer(thinking=True)
             try:
@@ -167,7 +189,7 @@ class PurpleTeamBot(commands.Bot):
                     panel.add_field(name=key.replace('_', ' ').title(), value=str(value)[:1024], inline=True)
             await interaction.followup.send(embed=panel)
 
-        @person.command(name="search", description="Permission-gated public-source person and identifier search")
+        @person.command(name="search", description="Permission-gated EnformionGO and public-source person search")
         async def person_search(interaction: discord.Interaction, first_name: str, last_name: str, city: str = "", state: str = "", email: str = "", phone: str = ""):
             gid = guild_id(interaction)
             if not can_use_person_search(interaction):
@@ -176,21 +198,33 @@ class PurpleTeamBot(commands.Bot):
             await interaction.response.defer(thinking=True, ephemeral=True)
             await record_audit(gid, interaction.user.id, "person.search", f"{first_name} {last_name}", f"city={city};state={state};email_supplied={bool(email)};phone_supplied={bool(phone)}")
             try:
+                payload = {
+                    "FirstName": first_name.strip(),
+                    "LastName": last_name.strip(),
+                    "Page": 1,
+                    "ResultsPerPage": 10,
+                }
+                if city or state:
+                    payload["Addresses"] = [{"AddressLine2": f"{city}, {state}".strip(", ")}]
+                if email:
+                    payload["Email"] = email.strip()
+                if phone:
+                    payload["Phone"] = phone.strip()
+
+                provider_data = await integrations.enformion_person_search(payload)
                 query = " ".join(x for x in [first_name.strip(), last_name.strip(), city.strip(), state.strip()] if x)
                 public_data = await passive_service.person_search(query)
-                panel = embed("Person Intelligence", "Public-source person correlation completed.", kind="info")
+
+                candidates = []
+                if isinstance(provider_data, dict):
+                    candidates = provider_data.get("Persons") or provider_data.get("Results") or provider_data.get("persons") or []
+                count = len(candidates) if isinstance(candidates, list) else "available"
+
+                panel = embed("Person Intelligence", "EnformionGO and public-source correlation completed.", kind="info")
                 panel.add_field(name="👤 Query", value=f"**{first_name} {last_name}**", inline=True)
+                panel.add_field(name="🧠 EnformionGO", value=f"Candidate results: **{count}**\nProvider response retained only in this ephemeral lookup.", inline=False)
                 panel.add_field(name="🔎 Public Sources", value=f"```json\n{json.dumps(public_data, indent=2)[:850]}\n```", inline=False)
-                identifier = email.strip() or phone.strip()
-                if identifier and settings.digital_footprint_api_key:
-                    footprint = await integrations.digital_footprint_lookup(identifier)
-                    summary = []
-                    for key, label in (("queryType", "Type"), ("matches", "Matches"), ("socialMatches", "Social Matches"), ("derivedMatches", "Derived Matches")):
-                        if footprint.get(key) is not None:
-                            summary.append(f"**{label}:** {footprint.get(key)}")
-                    panel.add_field(name="🌐 Digital Footprint", value="\n".join(summary)[:1024] or "Lookup completed.", inline=False)
-                elif identifier:
-                    panel.add_field(name="🌐 Digital Footprint", value="Not configured. Add `DIGITAL_FOOTPRINT_API_KEY` to enable identifier correlation.", inline=False)
+                panel.add_field(name="🔒 Privacy", value="Permission-gated, ephemeral, and audit logged.", inline=False)
                 await interaction.followup.send(embed=panel, ephemeral=True)
             except Exception as exc:
                 await interaction.followup.send(embed=embed("Person Search Failed", str(exc), kind="error"), ephemeral=True)
@@ -298,17 +332,19 @@ class PurpleTeamBot(commands.Bot):
 
         @self.tree.command(name="status", description="Show Purple Team runtime and configured integrations")
         async def status(interaction: discord.Interaction):
+            db = await database_status()
             panel = embed(
                 "Operations Status",
-                "**Security operations platform is online and ready.**\nRuntime health, assessment capacity, and provider connectivity are shown below.",
+                "**Security operations platform is online and ready.**\nRuntime health, assessment capacity, storage, and provider connectivity are shown below.",
                 kind="success",
             )
             panel.add_field(name="⚙️ Runtime", value=f"Python  `{platform.python_version()}`\nWorker  `Online`", inline=True)
             panel.add_field(name="🎯 Assessment", value=f"Concurrent scans  `{settings.max_active_scans}`\nScope enforcement  `Enabled`", inline=True)
+            panel.add_field(name="🗄️ Storage", value=f"Backend  `{db['backend']}`\n{db['detail'][:80]}", inline=True)
             panel.add_field(
                 name="🌐 Configured Intelligence Providers",
                 value="\n".join([
-                    status_dot(bool(settings.digital_footprint_api_key), label="**Digital Footprint**"),
+                    status_dot(bool(settings.enformion_ap_name and settings.enformion_ap_password), label="**EnformionGO**"),
                     status_dot(bool(settings.virustotal_api_key), label="**VirusTotal**"),
                     status_dot(bool(settings.abuseipdb_api_key), label="**AbuseIPDB**"),
                     status_dot(bool(settings.censys_pat), label="**Censys**"),
@@ -320,12 +356,12 @@ class PurpleTeamBot(commands.Bot):
             panel.add_field(
                 name="🧠 Free / Built-in Intelligence",
                 value="\n".join([
-                    always_status("**USACallerLookup**"),
                     always_status("**XposedOrNot**"),
                     always_status("**HIBP Pwned Passwords**"),
                     always_status("**FIRST EPSS**"),
                     always_status("**CISA KEV**"),
                     always_status("**crt.sh / DNS / RDAP**"),
+                    always_status("**Public Profile OSINT**"),
                     local_status("**Nmap Engine**"),
                 ]),
                 inline=False,
