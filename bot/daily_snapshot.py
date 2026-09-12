@@ -76,13 +76,11 @@ def render_snapshot(stats: dict[str, int | str], now: datetime) -> bytes:
     image = Image.new("RGB", (CARD_WIDTH, CARD_HEIGHT), BG)
     draw = ImageDraw.Draw(image)
 
-    # Outer tri-color frame.
     draw.rounded_rectangle((16, 16, CARD_WIDTH - 16, CARD_HEIGHT - 16), radius=28, outline=RED, width=3)
     draw.line((22, 18, 470, 18), fill=RED, width=4)
     draw.line((470, 18, 930, 18), fill=PURPLE, width=4)
     draw.line((930, 18, CARD_WIDTH - 22, 18), fill=BLUE, width=4)
 
-    # Header.
     draw.text((48, 42), "PURPLE TEAM", font=_font(48, True), fill=WHITE)
     draw.text((365, 42), "SNAPSHOT", font=_font(48, True), fill=PURPLE)
     draw.text((50, 99), "SECURITY OPERATIONS • OSINT • THREAT INTELLIGENCE", font=_font(19, True), fill=MUTED)
@@ -90,7 +88,6 @@ def render_snapshot(stats: dict[str, int | str], now: datetime) -> bytes:
     draw.ellipse((1084, 65, 1104, 85), fill=GREEN)
     draw.text((1118, 61), "SYSTEMS ONLINE", font=_font(20, True), fill=WHITE)
 
-    # Network intelligence.
     _section_header(draw, 150, "NETWORK INTELLIGENCE", "GLOBAL SNAPSHOT")
     card_y1, card_y2 = 198, 382
     gap = 24
@@ -102,7 +99,6 @@ def render_snapshot(stats: dict[str, int | str], now: datetime) -> bytes:
     _metric_card(draw, (x2, card_y1, x2 + card_w, card_y2), PURPLE, "MEMBERS PROTECTED", str(stats["members_protected"]), "Members in the protected guild")
     _metric_card(draw, (x3, card_y1, x3 + card_w, card_y2), BLUE, "AUTHORIZED TARGETS", str(stats["scope_targets"]), "Approved active-assessment scope")
 
-    # Security operations.
     _section_header(draw, 410, "NETWORK SECURITY OPERATIONS")
     ops_box = (48, 458, CARD_WIDTH - 48, 630)
     _rounded_panel(draw, ops_box, PURPLE)
@@ -110,7 +106,6 @@ def render_snapshot(stats: dict[str, int | str], now: datetime) -> bytes:
     labels = ["SCAN FAILURES (24H)", "SCANS PROCESSED", "ENFORCEMENT"]
     values = [str(stats["failed_scans_24h"]), str(stats["total_scans"]), "ONLINE"]
     subs = ["Requires review", "Assessment history", "Channel + scope protection"]
-    accents = [RED, PURPLE, CYAN]
     for idx, x in enumerate(col_x):
         draw.text((x, 486), labels[idx], font=_font(19, True), fill=MUTED)
         draw.text((x, 522), values[idx], font=_font(42, True), fill=GREEN if idx == 2 else WHITE)
@@ -118,14 +113,12 @@ def render_snapshot(stats: dict[str, int | str], now: datetime) -> bytes:
         if idx < 2:
             draw.line((x + 350, 484, x + 350, 596), fill=(55, 62, 82), width=2)
 
-    # Daily analytics.
     _section_header(draw, 660, "DAILY SECURITY ANALYTICS", "LAST 24 HOURS")
     card_y1, card_y2 = 708, 892
     _metric_card(draw, (x1, card_y1, x1 + card_w, card_y2), RED, "SECURITY EVENTS", str(stats["audit_events_24h"]), "Recorded audit activity")
     _metric_card(draw, (x2, card_y1, x2 + card_w, card_y2), PURPLE, "ASSESSMENTS", str(stats["scans_24h"]), "Active scans executed")
     _metric_card(draw, (x3, card_y1, x3 + card_w, card_y2), BLUE, "SUCCESSFUL SCANS", str(stats["successful_scans_24h"]), "Completed without error")
 
-    # Outcome strip.
     _section_header(draw, 920, "PROTECTION OUTCOME")
     outcome = (48, 968, CARD_WIDTH - 48, 1050)
     _rounded_panel(draw, outcome, BLUE)
@@ -169,11 +162,11 @@ async def collect_snapshot_stats(bot: discord.Client) -> dict[str, int | str]:
 
 
 async def post_snapshot(bot: discord.Client) -> discord.Message:
-    channel = bot.get_channel(settings.snapshot_channel_id)
+    channel = bot.get_channel(settings.discord_snapshot_channel_id)
     if channel is None:
-        channel = await bot.fetch_channel(settings.snapshot_channel_id)
+        channel = await bot.fetch_channel(settings.discord_snapshot_channel_id)
     if not isinstance(channel, (discord.TextChannel, discord.Thread)):
-        raise RuntimeError("SNAPSHOT_CHANNEL_ID is not a text-capable Discord channel")
+        raise RuntimeError("DISCORD_SNAPSHOT_CHANNEL_ID is not a text-capable Discord channel")
 
     tz = ZoneInfo(settings.snapshot_timezone)
     now = datetime.now(tz)
@@ -202,6 +195,7 @@ def install_daily_snapshot(bot: discord.Client) -> None:
         await bot.wait_until_ready()
 
     daily_snapshot_loop.start()
+    setattr(bot, "_daily_snapshot_loop", daily_snapshot_loop)
 
 
 def register_snapshot_command(bot: discord.Client) -> None:
