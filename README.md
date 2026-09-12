@@ -37,25 +37,22 @@ Purple Team is a lightweight security-operations Discord bot combining public-so
 - web technology fingerprinting
 - TLS certificate, protocol, cipher, expiry, issuer, subject, and SAN inspection
 - public person / identifier correlation
-- Digital Footprint email, phone, and username correlation
-- USACallerLookup US phone carrier/location/complaint intelligence
 - urlscan.io web intelligence
 - AlienVault OTX IOC enrichment
 
 ## Identity and person intelligence
 
-- public-source person correlation
-- Digital Footprint email lookup
-- Digital Footprint username lookup
-- Digital Footprint phone correlation when supported
-- USACallerLookup US phone carrier and assigned-location intelligence
-- USACallerLookup FTC robocall complaint context
+- EnformionGO person search
+- EnformionGO reverse phone intelligence
+- EnformionGO reverse email intelligence
+- EnformionGO reverse address intelligence
+- EnformionGO contact-enrichment adapter
 - XposedOrNot email breach exposure
 - HIBP Pwned Passwords k-anonymity checks
 - public username/profile correlation
 - email-domain correlation
 
-Person and identifier commands are permission-gated, return ephemerally, and are audit logged. Digital Footprint verifies platform-registration and public-web signals; USACallerLookup uses public numbering and FTC complaint data. Neither provider should be treated as proof that a person owns an account or placed a reported call.
+Person and identifier commands are permission-gated, return ephemerally, and are audit logged. Provider credentials are kept in the server `.env` and are never committed to the repository.
 
 ## Threat and vulnerability intelligence
 
@@ -110,7 +107,7 @@ Exposure checks only collect response status and metadata; they do not dump disc
 
 ## Investigation workflow
 
-`/investigate <target>` combines passive and authorized active intelligence into a single workflow. It currently includes DNS, Certificate Transparency, HTTP/security-header analysis, and a lightweight Nmap pass when the target is in scope.
+`/investigate <target>` combines passive and authorized active intelligence into a single workflow. It includes DNS, Certificate Transparency, HTTP/security-header analysis, and a lightweight Nmap pass when the target is in scope.
 
 ## Commands
 
@@ -136,6 +133,7 @@ Exposure checks only collect response status and metadata; they do not dump disc
 
 /reverse phone <phone>
 /reverse email <email>
+/reverse address <address_line1> <city_state_zip>
 /reverse username <username>
 
 /intel lookup <domain|ip|hash>
@@ -165,7 +163,8 @@ Exposure checks only collect response status and metadata; they do not dump disc
 
 ## Lightweight by design
 
-- SQLite by default with a planned PostgreSQL/Neon migration path.
+- SQLite works out of the box.
+- PostgreSQL / Neon is supported by setting `DATABASE_URL`.
 - Async HTTP and DNS operations.
 - Remote CVE, breach, reputation, and OSINT intelligence instead of large local datasets.
 - Conservative Nmap concurrency and scan timeouts.
@@ -218,8 +217,10 @@ SCAN_TIMEOUT_SECONDS=90
 HTTP_TIMEOUT_SECONDS=12
 USER_AGENT=PurpleTeamBot/0.1
 
-DIGITAL_FOOTPRINT_API_KEY=
-DIGITAL_FOOTPRINT_BASE_URL=https://api.digifootprint.dev/v1/lookup
+ENFORMION_AP_NAME=
+ENFORMION_AP_PASSWORD=
+ENFORMION_SEARCH_TYPE=Person
+ENFORMION_BASE_URL=https://devapi.enformion.com/PersonSearch
 
 VIRUSTOTAL_API_KEY=
 ABUSEIPDB_API_KEY=
@@ -228,9 +229,9 @@ URLSCAN_API_KEY=
 OTX_API_KEY=
 ```
 
-Only `DISCORD_TOKEN` is mandatory. USACallerLookup, XposedOrNot, HIBP Pwned Passwords, FIRST EPSS, CISA KEV, RDAP, Certificate Transparency, DNS, reverse DNS, email-domain posture, and basic HTTP/TLS checks do not require paid API credentials. Digital Footprint requires an API key and currently includes a limited free lookup allowance for new accounts.
+Only `DISCORD_TOKEN` is mandatory for the base bot. EnformionGO credentials enable the richer person/reverse intelligence layer. XposedOrNot, HIBP Pwned Passwords, FIRST EPSS, CISA KEV, RDAP, Certificate Transparency, DNS, reverse DNS, email-domain posture, and basic HTTP/TLS checks do not require paid API credentials.
 
-The project intentionally does not require EnformionGO, People Data Labs, the paid HIBP account API, Shodan, or SecurityTrails.
+If `DATABASE_URL` is blank, Purple Team uses SQLite. If a PostgreSQL/Neon connection string is supplied, the bot automatically initializes and uses PostgreSQL instead.
 
 `DISCORD_GUILD_ID` is optional but useful during development because commands can sync directly to a test server.
 
