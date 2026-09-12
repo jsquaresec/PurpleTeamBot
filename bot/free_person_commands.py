@@ -85,9 +85,8 @@ async def _github_people(first_name: str, last_name: str, city: str = "", state:
         if response.status_code in (403, 429):
             return []
         response.raise_for_status()
-        items = response.json().get("items", [])
         results = []
-        for item in items[:5]:
+        for item in response.json().get("items", [])[:5]:
             login = str(item.get("login") or "")
             if not login:
                 continue
@@ -114,17 +113,17 @@ async def _gitlab_people(first_name: str, last_name: str) -> list[dict]:
         if response.status_code in (403, 429):
             return []
         response.raise_for_status()
-        rows = []
-        for item in response.json()[:5]:
-            rows.append({
+        return [
+            {
                 "site": "GitLab",
                 "name": item.get("name") or item.get("username") or "",
                 "username": item.get("username") or "",
                 "location": "",
                 "company": "",
                 "url": item.get("web_url") or "",
-            })
-        return rows
+            }
+            for item in response.json()[:5]
+        ]
 
 
 def _phone_summary(data: dict) -> str:
@@ -165,12 +164,9 @@ def register_free_person_commands(bot) -> None:
     ):
         if not await _require_privileged(interaction, "person.search"):
             return
-        await interaction.response.defer(thinking=True, ephemeral=True)
+        await interaction.response.defer(thinking=True)
         try:
-            github = await _github_people(first_name, last_name, city, state)
-            gitlab = await _gitlab_people(first_name, last_name)
-            rows = github + gitlab
-
+            rows = await _github_people(first_name, last_name, city, state) + await _gitlab_people(first_name, last_name)
             panel = _embed(
                 "Person Intelligence",
                 "Free public-source correlation completed. Results are leads for verification, not proof of identity.",
@@ -179,7 +175,6 @@ def register_free_person_commands(bot) -> None:
             panel.add_field(name="👤 Query", value=f"**{first_name.strip()} {last_name.strip()}**", inline=True)
             if city or state:
                 panel.add_field(name="📍 Location Filter", value=" ".join(x for x in (city.strip(), state.strip()) if x), inline=True)
-
             profile_text = "\n".join(
                 f"• **{row['site']}** — {row['name']} (`{row['username']}`)"
                 + (f" — {row['location']}" if row.get("location") else "")
@@ -191,14 +186,11 @@ def register_free_person_commands(bot) -> None:
                 value=profile_text[:1024] or "No GitHub/GitLab candidates were returned.",
                 inline=False,
             )
-
             if phone.strip():
                 try:
-                    caller = await _usa_caller_lookup(phone)
-                    panel.add_field(name="📞 USACallerLookup", value=_phone_summary(caller), inline=False)
+                    panel.add_field(name="📞 USACallerLookup", value=_phone_summary(await _usa_caller_lookup(phone)), inline=False)
                 except Exception as exc:
                     panel.add_field(name="⚠️ Phone Context", value=str(exc)[:1024], inline=False)
-
             if email.strip():
                 try:
                     breaches = await _xposed_account(email)
@@ -215,86 +207,66 @@ def register_free_person_commands(bot) -> None:
                     )
                 except Exception as exc:
                     panel.add_field(name="⚠️ Email Context", value=str(exc)[:1024], inline=False)
-
-            panel.add_field(
-                name="🔒 Safety",
-                value="Permission-gated, ephemeral, audit logged, and limited to public/free sources.",
-                inline=False,
-            )
-            await interaction.followup.send(embed=panel, ephemeral=True)
+            panel.add_field(name="🔒 Safety", value="Permission-gated, audit logged, and limited to public/free sources.", inline=False)
+            await interaction.followup.send(embed=panel)
         except Exception as exc:
-            await interaction.followup.send(embed=_embed("Person Search Failed", str(exc), kind="error"), ephemeral=True)
+            await interaction.followup.send(embed=_embed("Person Search Failed", str(exc), kind="error"))
 
     @person.command(name="public", description="Lightweight public-source identifier correlation")
     async def person_public(interaction: discord.Interaction, query: str):
         if not await _require_privileged(interaction, "person.public"):
             return
-        await interaction.response.defer(thinking=True, ephemeral=True)
+        await interaction.response.defer(thinking=True)
         try:
             data = await passive_service.person_search(query)
-            await interaction.followup.send(
-                embed=_embed("Public Person OSINT", f"```json\n{json.dumps(data, indent=2, ensure_ascii=False)[:3300]}\n```", kind="info"),
-                ephemeral=True,
-            )
+            await interaction.followup.send(embed=_embed("Public Person OSINT", f"```json\n{json.dumps(data, indent=2, ensure_ascii=False)[:3300]}\n```", kind="info"))
         except Exception as exc:
-            await interaction.followup.send(embed=_embed("Public Person OSINT Failed", str(exc), kind="error"), ephemeral=True)
+            await interaction.followup.send(embed=_embed("Public Person OSINT Failed", str(exc), kind="error"))
 
     @reverse.command(name="phone", description="Free US phone carrier/location/complaint intelligence")
     async def reverse_phone(interaction: discord.Interaction, phone: str):
         if not await _require_privileged(interaction, "person.phone"):
             return
-        await interaction.response.defer(thinking=True, ephemeral=True)
+        await interaction.response.defer(thinking=True)
         try:
             data = await _usa_caller_lookup(phone)
             panel = _embed("Reverse Phone Intelligence", "USACallerLookup public-data lookup completed.", kind="info")
             panel.add_field(name="📞 Phone Context", value=_phone_summary(data), inline=False)
-            panel.add_field(
-                name="ℹ️ Data Note",
-                value="Carrier/location are numbering-plan assignments. Complaint records can involve spoofed caller ID and are not proof of wrongdoing.",
-                inline=False,
-            )
-            await interaction.followup.send(embed=panel, ephemeral=True)
+            panel.add_field(name="ℹ️ Data Note", value="Carrier/location are numbering-plan assignments. Complaint records can involve spoofed caller ID and are not proof of wrongdoing.", inline=False)
+            await interaction.followup.send(embed=panel)
         except Exception as exc:
-            await interaction.followup.send(embed=_embed("Reverse Phone Failed", str(exc), kind="error"), ephemeral=True)
+            await interaction.followup.send(embed=_embed("Reverse Phone Failed", str(exc), kind="error"))
 
     @reverse.command(name="email", description="Free breach and email-domain intelligence")
     async def reverse_email(interaction: discord.Interaction, email: str):
         if not await _require_privileged(interaction, "person.email"):
             return
-        await interaction.response.defer(thinking=True, ephemeral=True)
+        await interaction.response.defer(thinking=True)
         try:
             breaches = await _xposed_account(email)
             posture = await advanced_osint.email_posture(email)
             panel = _embed("Reverse Email Intelligence", "Free public-source email intelligence completed.", kind="info")
-            panel.add_field(
-                name="🛡️ Breach Exposure",
-                value="\n".join(f"• {x}" for x in breaches[:20])[:1024] if breaches else "No XposedOrNot breach records returned.",
-                inline=False,
-            )
+            panel.add_field(name="🛡️ Breach Exposure", value="\n".join(f"• {x}" for x in breaches[:20])[:1024] if breaches else "No XposedOrNot breach records returned.", inline=False)
             panel.add_field(name="📬 Domain", value=f"`{posture['domain']}`", inline=True)
             panel.add_field(name="MX", value=str(len(posture['mx'])), inline=True)
             panel.add_field(name="SPF / DMARC", value=f"{'✓' if posture['spf'] else '—'} / {'✓' if posture['dmarc'] else '—'}", inline=True)
-            await interaction.followup.send(embed=panel, ephemeral=True)
+            await interaction.followup.send(embed=panel)
         except Exception as exc:
-            await interaction.followup.send(embed=_embed("Reverse Email Failed", str(exc), kind="error"), ephemeral=True)
+            await interaction.followup.send(embed=_embed("Reverse Email Failed", str(exc), kind="error"))
 
     @reverse.command(name="username", description="Correlate a username across public platforms")
     async def reverse_username(interaction: discord.Interaction, username: str):
         if not await _require_privileged(interaction, "person.username"):
             return
-        await interaction.response.defer(thinking=True, ephemeral=True)
+        await interaction.response.defer(thinking=True)
         try:
             rows = await advanced_osint.username_profiles(username)
             found = [row for row in rows if row.get("present")]
             panel = _embed("Username Footprint", f"Public-source username correlation for `{username}`.", kind="info")
-            panel.add_field(
-                name=f"🔎 Confirmed Profiles ({len(found)})",
-                value="\n".join(f"• **{row['site']}** — {row['url']}" for row in found)[:1024] or "No matching public profiles were confirmed.",
-                inline=False,
-            )
-            await interaction.followup.send(embed=panel, ephemeral=True)
+            panel.add_field(name=f"🔎 Confirmed Profiles ({len(found)})", value="\n".join(f"• **{row['site']}** — {row['url']}" for row in found)[:1024] or "No matching public profiles were confirmed.", inline=False)
+            await interaction.followup.send(embed=panel)
         except Exception as exc:
-            await interaction.followup.send(embed=_embed("Username Footprint Failed", str(exc), kind="error"), ephemeral=True)
+            await interaction.followup.send(embed=_embed("Username Footprint Failed", str(exc), kind="error"))
 
     @bot.tree.command(name="status", description="Show Purple Team runtime and free-first intelligence stack")
     async def status(interaction: discord.Interaction):
@@ -332,8 +304,8 @@ def register_free_person_commands(bot) -> None:
             ]),
             inline=False,
         )
-        panel.add_field(name="🛡️ Security Mode", value="Active scanning requires explicit server scope authorization. Person intelligence is permission-gated, ephemeral, and audited.", inline=False)
-        await interaction.response.send_message(embed=panel, ephemeral=True)
+        panel.add_field(name="🛡️ Security Mode", value="Active scanning requires explicit server scope authorization. Person intelligence is permission-gated and audited.", inline=False)
+        await interaction.response.send_message(embed=panel)
 
     bot.tree.add_command(person)
     bot.tree.add_command(reverse)
