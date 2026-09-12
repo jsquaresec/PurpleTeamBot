@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import io
-from datetime import datetime, time
+from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import discord
 from discord import app_commands
-from discord.ext import tasks
 from PIL import Image, ImageDraw, ImageFont
 
 from core.config import settings
@@ -179,23 +179,57 @@ async def post_snapshot(bot: discord.Client) -> discord.Message:
     )
 
 
+def _snapshot_date() -> str:
+    return datetime.now(ZoneInfo(settings.snapshot_timezone)).date().isoformat()
+
+
+def _already_posted_today() -> bool:
+    path = Path(settings.snapshot_state_path)
+    try:
+        return path.read_text(encoding="utf-8").strip() == _snapshot_date()
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        print(f"Snapshot state read failed: {exc}")
+        return False
+
+
+def _mark_posted_today() -> None:
+    path = Path(settings.snapshot_state_path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(_snapshot_date(), encoding="utf-8")
+    except OSError as exc:
+        print(f"Snapshot state write failed: {exc}")
+
+
 def install_daily_snapshot(bot: discord.Client) -> None:
-    tz = ZoneInfo(settings.snapshot_timezone)
-    run_at = time(hour=settings.snapshot_hour, minute=settings.snapshot_minute, tzinfo=tz)
+    """Post the daily snapshot once after the bot becomes ready.
 
-    @tasks.loop(time=run_at)
-    async def daily_snapshot_loop() -> None:
-        try:
-            await post_snapshot(bot)
-        except Exception as exc:
-            print(f"Daily snapshot failed: {exc}")
+    This is designed to follow the production daily service restart. A small
+    startup delay gives Discord/cache/database connections time to settle.
+    The local date marker prevents duplicate automatic posts when the service
+    restarts more than once on the same day. Manual `/snapshot post` remains
+    available and does not change the automatic once-per-day marker.
+    """
 
-    @daily_snapshot_loop.before_loop
-    async def before_snapshot_loop() -> None:
+    async def post_after_restart() -> None:
         await bot.wait_until_ready()
+        await asyncio.sleep(settings.snapshot_startup_delay_seconds)
 
-    daily_snapshot_loop.start()
-    setattr(bot, "_daily_snapshot_loop", daily_snapshot_loop)
+        if _already_posted_today():
+            print("Daily snapshot already posted for today; startup post skipped.")
+            return
+
+        try:
+            message = await post_snapshot(bot)
+            _mark_posted_today()
+            print(f"Daily snapshot posted after restart: {message.id}")
+        except Exception as exc:
+            print(f"Daily snapshot startup post failed: {exc}")
+
+    task = asyncio.create_task(post_after_restart(), name="purple-team-startup-snapshot")
+    setattr(bot, "_daily_snapshot_task", task)
 
 
 def register_snapshot_command(bot: discord.Client) -> None:
