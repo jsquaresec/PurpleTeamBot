@@ -5,6 +5,7 @@ from discord import app_commands
 
 from bot.ui import make_embed
 from core.config import settings
+from services.advanced_osint import advanced_osint
 from services.analyzers import analyze_email_headers, hash_bytes
 from services.integrations import integrations
 from services.passive_service import passive_service
@@ -35,26 +36,6 @@ def _compact_json(data: object) -> str:
     return json.dumps(data, indent=2, ensure_ascii=False)[:900]
 
 
-def _footprint_summary(data: dict) -> str:
-    lines = []
-    for key, label in (
-        ("queryType", "Type"),
-        ("matches", "Matches"),
-        ("socialMatches", "Social Matches"),
-        ("derivedMatches", "Derived Matches"),
-    ):
-        value = data.get(key)
-        if value is not None:
-            lines.append(f"**{label}:** {value}")
-    breaches = data.get("breaches") or []
-    if isinstance(breaches, list):
-        lines.append(f"**Breaches:** {len(breaches)}")
-    mentions = data.get("webMentions") or []
-    if isinstance(mentions, list):
-        lines.append(f"**Web Mentions:** {len(mentions)}")
-    return "\n".join(lines) or "Lookup completed."
-
-
 async def _check_privileged(interaction: discord.Interaction, action: str) -> bool:
     if not _privileged(interaction):
         await interaction.response.send_message(
@@ -71,56 +52,77 @@ def register_extra_commands(bot) -> None:
     analyze = app_commands.Group(name="analyze", description="Defensive file and email analysis")
     recon = app_commands.Group(name="recon", description="Lightweight passive reconnaissance")
 
-    @reverse.command(name="phone", description="US phone carrier/location/complaint intelligence")
+    @reverse.command(name="phone", description="EnformionGO reverse phone intelligence")
     async def reverse_phone(interaction: discord.Interaction, phone: str):
         if not await _check_privileged(interaction, "person.phone"):
             return
         await interaction.response.defer(thinking=True, ephemeral=True)
         try:
-            caller = await integrations.usa_caller_lookup(phone)
-            panel = _embed("Reverse Phone Intelligence", "USACallerLookup public-data lookup completed.", kind="info")
-            panel.add_field(name="📞 USACallerLookup", value=f"```json\n{_compact_json(caller)}\n```", inline=False)
-            if settings.digital_footprint_api_key:
-                try:
-                    footprint = await integrations.digital_footprint_lookup(phone)
-                    panel.add_field(name="🌐 Digital Footprint", value=_footprint_summary(footprint)[:1024], inline=False)
-                except Exception as exc:
-                    panel.add_field(name="⚠️ Digital Footprint", value=str(exc)[:1024], inline=False)
-            panel.add_field(name="ℹ️ Data Note", value="Complaint data can reflect spoofed caller ID and is not proof of wrongdoing.", inline=False)
+            data = await integrations.enformion_phone(phone)
+            panel = _embed("Reverse Phone Intelligence", "EnformionGO phone intelligence completed.", kind="info")
+            panel.add_field(name="📞 Provider Result", value=f"```json\n{_compact_json(data)}\n```", inline=False)
+            try:
+                caller = await integrations.usa_caller_lookup(phone)
+                panel.add_field(name="📡 Public Caller Context", value=f"```json\n{_compact_json(caller)}\n```", inline=False)
+            except AttributeError:
+                pass
+            except Exception:
+                pass
+            panel.add_field(name="🔒 Access", value="Permission-gated, ephemeral, and audit logged.", inline=False)
             await interaction.followup.send(embed=panel, ephemeral=True)
         except Exception as exc:
             await interaction.followup.send(embed=_embed("Reverse Phone Failed", str(exc), kind="error"), ephemeral=True)
 
-    @reverse.command(name="email", description="Email footprint, breach, and public-web intelligence")
+    @reverse.command(name="email", description="EnformionGO reverse email intelligence")
     async def reverse_email(interaction: discord.Interaction, email: str):
         if not await _check_privileged(interaction, "person.email"):
             return
         await interaction.response.defer(thinking=True, ephemeral=True)
         try:
-            footprint = await integrations.digital_footprint_lookup(email)
-            panel = _embed("Reverse Email Intelligence", "Digital Footprint identifier lookup completed.", kind="info")
-            panel.add_field(name="🌐 Footprint Summary", value=_footprint_summary(footprint)[:1024], inline=False)
-            results = footprint.get("results") or []
-            matches = []
-            if isinstance(results, list):
-                for item in results:
-                    if isinstance(item, dict) and item.get("registered") is True:
-                        matches.append(str(item.get("platform") or item.get("name") or "unknown"))
-            if matches:
-                panel.add_field(name="🔗 Verified Platforms", value="\n".join(f"• {x}" for x in matches[:30])[:1024], inline=False)
+            data = await integrations.enformion_email(email)
+            panel = _embed("Reverse Email Intelligence", "EnformionGO email intelligence completed.", kind="info")
+            panel.add_field(name="📧 Provider Result", value=f"```json\n{_compact_json(data)}\n```", inline=False)
+            try:
+                breaches = await integrations.xposed_account(email)
+                panel.add_field(
+                    name="🛡️ Breach Exposure",
+                    value="\n".join(f"• {x}" for x in breaches[:20]) if breaches else "No XposedOrNot breach records returned.",
+                    inline=False,
+                )
+            except Exception:
+                pass
             await interaction.followup.send(embed=panel, ephemeral=True)
         except Exception as exc:
             await interaction.followup.send(embed=_embed("Reverse Email Failed", str(exc), kind="error"), ephemeral=True)
 
-    @reverse.command(name="username", description="Check a username across public platforms")
+    @reverse.command(name="address", description="EnformionGO reverse address intelligence")
+    async def reverse_address(interaction: discord.Interaction, address_line1: str, city_state_zip: str):
+        if not await _check_privileged(interaction, "person.address"):
+            return
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        try:
+            data = await integrations.enformion_address(address_line1, city_state_zip)
+            panel = _embed("Reverse Address Intelligence", "EnformionGO address intelligence completed.", kind="info")
+            panel.add_field(name="🏠 Provider Result", value=f"```json\n{_compact_json(data)}\n```", inline=False)
+            panel.add_field(name="🔒 Access", value="Permission-gated, ephemeral, and audit logged.", inline=False)
+            await interaction.followup.send(embed=panel, ephemeral=True)
+        except Exception as exc:
+            await interaction.followup.send(embed=_embed("Reverse Address Failed", str(exc), kind="error"), ephemeral=True)
+
+    @reverse.command(name="username", description="Correlate a username across public platforms")
     async def reverse_username(interaction: discord.Interaction, username: str):
         if not await _check_privileged(interaction, "person.username"):
             return
         await interaction.response.defer(thinking=True, ephemeral=True)
         try:
-            footprint = await integrations.digital_footprint_lookup(username)
-            panel = _embed("Username Footprint", "Digital Footprint username lookup completed.", kind="info")
-            panel.add_field(name="🌐 Footprint Summary", value=_footprint_summary(footprint)[:1024], inline=False)
+            rows = await advanced_osint.username_profiles(username)
+            found = [row for row in rows if row.get("present")]
+            panel = _embed("Username Footprint", f"Public-source username correlation for `{username}`.", kind="info")
+            panel.add_field(
+                name=f"🔎 Confirmed Profiles ({len(found)})",
+                value="\n".join(f"• **{row['site']}** — {row['url']}" for row in found)[:1024] or "No matching public profiles were confirmed.",
+                inline=False,
+            )
             await interaction.followup.send(embed=panel, ephemeral=True)
         except Exception as exc:
             await interaction.followup.send(embed=_embed("Username Footprint Failed", str(exc), kind="error"), ephemeral=True)
