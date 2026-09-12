@@ -52,6 +52,9 @@ class Settings:
         "DISCORD_SNAPSHOT_CHANNEL_ID",
         DEFAULT_SNAPSHOT_CHANNEL_ID,
     )
+    snapshot_timezone: str = os.getenv("SNAPSHOT_TIMEZONE", "America/Chicago").strip() or "America/Chicago"
+    snapshot_hour: int = min(23, max(0, _int("SNAPSHOT_HOUR", 8)))
+    snapshot_minute: int = min(59, max(0, _int("SNAPSHOT_MINUTE", 0)))
     bot_owner_id: int = _int("BOT_OWNER_ID")
     database_path: str = os.getenv("DATABASE_PATH", "purple_team.db")
     database_url: str = os.getenv("DATABASE_URL", "").strip()
