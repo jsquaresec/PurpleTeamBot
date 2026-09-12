@@ -1,0 +1,11 @@
+[Unit]
+Description=Restart PurpleTeamBot every day at 4:00 AM America/Chicago
+
+[Timer]
+OnCalendar=*-*-* 04:00:00 America/Chicago
+Persistent=true
+AccuracySec=1min
+Unit=purpleteambot-restart.service
+
+[Install]
+WantedBy=timers.target

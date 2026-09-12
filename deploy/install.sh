@@ -35,7 +35,13 @@ fi
 
 chown -R "$APP_USER:$APP_USER" "$APP_DIR"
 cp "$APP_DIR/deploy/purpleteambot.service" /etc/systemd/system/purpleteambot.service
+cp "$APP_DIR/deploy/purpleteambot-restart.service" /etc/systemd/system/purpleteambot-restart.service
+cp "$APP_DIR/deploy/purpleteambot-restart.timer" /etc/systemd/system/purpleteambot-restart.timer
 systemctl daemon-reload
 systemctl enable purpleteambot.service
+systemctl enable --now purpleteambot-restart.timer
 
-echo "Install complete. Edit $APP_DIR/.env, then run: sudo systemctl restart purpleteambot"
+echo "Install complete."
+echo "Daily restart timer enabled for 04:00 America/Chicago."
+echo "Edit $APP_DIR/.env, then run: sudo systemctl restart purpleteambot"
+echo "Check the timer with: systemctl list-timers purpleteambot-restart.timer"

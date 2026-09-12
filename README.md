@@ -105,6 +105,14 @@ Exposure checks only collect response status and metadata; they do not dump disc
 - IOC lookup for IPs, domains, URLs, and hashes through configured providers
 - investigation history and audit logging
 
+## Daily snapshot
+
+Purple Team generates a red / blue / purple / white operational snapshot PNG and posts it automatically after the bot comes back online from its daily service restart. The card pulls live counts from the configured database, including authorized targets, scan totals, last-24-hour assessments, scan failures, successful scans, audit events, top activity, member count, and database status.
+
+The production announcement channel defaults to `1547422897054818355`. It is outbound-only: slash commands remain restricted to the configured command-channel allowlist. After Discord reaches ready state, the bot waits briefly and posts the card. A local date marker prevents duplicate automatic cards if the service restarts more than once in the same day.
+
+Manage Server users can run `/snapshot post` from an approved command channel to generate and post the snapshot immediately for testing. Manual posts do not affect the automatic once-per-day restart marker.
+
 ## Investigation workflow
 
 `/investigate <target>` combines passive and authorized active intelligence into a single workflow. It includes DNS, Certificate Transparency, HTTP/security-header analysis, and a lightweight Nmap pass when the target is in scope.
@@ -159,6 +167,7 @@ Exposure checks only collect response status and metadata; they do not dump disc
 /investigate <target>
 /history
 /status
+/snapshot post
 ```
 
 ## Lightweight by design
@@ -208,6 +217,11 @@ python main.py
 DISCORD_TOKEN=
 DISCORD_GUILD_ID=
 BOT_OWNER_ID=
+DISCORD_ALLOWED_CHANNEL_IDS=1547700463611289640,1548426555934376096,1548416136436129983,1548426462120386672,1548437367331881030
+DISCORD_SNAPSHOT_CHANNEL_ID=1547422897054818355
+SNAPSHOT_TIMEZONE=America/Chicago
+SNAPSHOT_STARTUP_DELAY_SECONDS=15
+SNAPSHOT_STATE_PATH=.purple_team_snapshot_date
 
 DATABASE_PATH=purple_team.db
 DATABASE_URL=

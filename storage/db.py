@@ -228,3 +228,85 @@ async def database_status() -> dict[str, str]:
         cur = await db.execute("SELECT sqlite_version()")
         row = await cur.fetchone()
     return {"backend": "SQLite", "detail": f"SQLite {row[0] if row else 'unknown'}"}
+
+
+async def snapshot_stats(guild_id: int) -> dict[str, int | str]:
+    """Aggregate safe operational statistics for the daily Discord snapshot."""
+    if using_postgres():
+        pool = await _pg_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT
+                    (SELECT COUNT(*) FROM authorized_scope WHERE guild_id = $1) AS scope_targets,
+                    (SELECT COUNT(*) FROM scan_history WHERE guild_id = $1) AS total_scans,
+                    (SELECT COUNT(*) FROM scan_history WHERE guild_id = $1 AND created_at >= NOW() - INTERVAL '24 hours') AS scans_24h,
+                    (SELECT COUNT(*) FROM scan_history WHERE guild_id = $1 AND status = 'ok' AND created_at >= NOW() - INTERVAL '24 hours') AS successful_scans_24h,
+                    (SELECT COUNT(*) FROM scan_history WHERE guild_id = $1 AND status <> 'ok' AND created_at >= NOW() - INTERVAL '24 hours') AS failed_scans_24h,
+                    (SELECT COUNT(*) FROM audit_events WHERE guild_id = $1) AS total_audits,
+                    (SELECT COUNT(*) FROM audit_events WHERE guild_id = $1 AND created_at >= NOW() - INTERVAL '24 hours') AS audit_events_24h
+                """,
+                guild_id,
+            )
+            top_action = await conn.fetchval(
+                """
+                SELECT action
+                FROM audit_events
+                WHERE guild_id = $1 AND created_at >= NOW() - INTERVAL '24 hours'
+                GROUP BY action
+                ORDER BY COUNT(*) DESC, action ASC
+                LIMIT 1
+                """,
+                guild_id,
+            )
+        return {
+            "scope_targets": int(row["scope_targets"] or 0),
+            "total_scans": int(row["total_scans"] or 0),
+            "scans_24h": int(row["scans_24h"] or 0),
+            "successful_scans_24h": int(row["successful_scans_24h"] or 0),
+            "failed_scans_24h": int(row["failed_scans_24h"] or 0),
+            "total_audits": int(row["total_audits"] or 0),
+            "audit_events_24h": int(row["audit_events_24h"] or 0),
+            "top_action_24h": str(top_action or "No activity"),
+            "database_backend": "PostgreSQL",
+        }
+
+    async with aiosqlite.connect(settings.database_path) as db:
+        cur = await db.execute(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM authorized_scope WHERE guild_id = ?) AS scope_targets,
+                (SELECT COUNT(*) FROM scan_history WHERE guild_id = ?) AS total_scans,
+                (SELECT COUNT(*) FROM scan_history WHERE guild_id = ? AND datetime(created_at) >= datetime('now', '-24 hours')) AS scans_24h,
+                (SELECT COUNT(*) FROM scan_history WHERE guild_id = ? AND status = 'ok' AND datetime(created_at) >= datetime('now', '-24 hours')) AS successful_scans_24h,
+                (SELECT COUNT(*) FROM scan_history WHERE guild_id = ? AND status <> 'ok' AND datetime(created_at) >= datetime('now', '-24 hours')) AS failed_scans_24h,
+                (SELECT COUNT(*) FROM audit_events WHERE guild_id = ?) AS total_audits,
+                (SELECT COUNT(*) FROM audit_events WHERE guild_id = ? AND datetime(created_at) >= datetime('now', '-24 hours')) AS audit_events_24h
+            """,
+            (guild_id, guild_id, guild_id, guild_id, guild_id, guild_id, guild_id),
+        )
+        row = await cur.fetchone()
+        top_cur = await db.execute(
+            """
+            SELECT action
+            FROM audit_events
+            WHERE guild_id = ? AND datetime(created_at) >= datetime('now', '-24 hours')
+            GROUP BY action
+            ORDER BY COUNT(*) DESC, action ASC
+            LIMIT 1
+            """,
+            (guild_id,),
+        )
+        top_row = await top_cur.fetchone()
+
+    return {
+        "scope_targets": int(row[0] or 0),
+        "total_scans": int(row[1] or 0),
+        "scans_24h": int(row[2] or 0),
+        "successful_scans_24h": int(row[3] or 0),
+        "failed_scans_24h": int(row[4] or 0),
+        "total_audits": int(row[5] or 0),
+        "audit_events_24h": int(row[6] or 0),
+        "top_action_24h": str(top_row[0] if top_row else "No activity"),
+        "database_backend": "SQLite",
+    }

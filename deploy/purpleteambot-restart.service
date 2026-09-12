@@ -1,0 +1,7 @@
+[Unit]
+Description=Daily restart for PurpleTeamBot
+Requires=purpleteambot.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl restart purpleteambot.service
