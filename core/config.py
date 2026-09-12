@@ -5,15 +5,27 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+DEFAULT_ALLOWED_CHANNEL_IDS = frozenset(
+    {
+        1547700463611289640,
+        1548426555934376096,
+        1548416136436129983,
+        1548426462120386672,
+        1548437367331881030,
+    }
+)
+DEFAULT_SNAPSHOT_CHANNEL_ID = 1547422897054818355
+
+
 def _int(name: str, default: int = 0) -> int:
     value = os.getenv(name, "").strip()
     return int(value) if value else default
 
 
-def _int_set(name: str) -> frozenset[int]:
+def _int_set(name: str, default: frozenset[int] = frozenset()) -> frozenset[int]:
     raw = os.getenv(name, "").strip()
     if not raw:
-        return frozenset()
+        return default
 
     values: set[int] = set()
     for item in raw.split(","):
@@ -32,7 +44,14 @@ def _int_set(name: str) -> frozenset[int]:
 class Settings:
     discord_token: str = os.getenv("DISCORD_TOKEN", "").strip()
     discord_guild_id: int = _int("DISCORD_GUILD_ID")
-    discord_allowed_channel_ids: frozenset[int] = _int_set("DISCORD_ALLOWED_CHANNEL_IDS")
+    discord_allowed_channel_ids: frozenset[int] = _int_set(
+        "DISCORD_ALLOWED_CHANNEL_IDS",
+        DEFAULT_ALLOWED_CHANNEL_IDS,
+    )
+    discord_snapshot_channel_id: int = _int(
+        "DISCORD_SNAPSHOT_CHANNEL_ID",
+        DEFAULT_SNAPSHOT_CHANNEL_ID,
+    )
     bot_owner_id: int = _int("BOT_OWNER_ID")
     database_path: str = os.getenv("DATABASE_PATH", "purple_team.db")
     database_url: str = os.getenv("DATABASE_URL", "").strip()
