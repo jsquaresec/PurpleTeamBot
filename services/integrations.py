@@ -22,8 +22,32 @@ class IntegrationService:
         }
         async with httpx.AsyncClient(timeout=self.timeout, headers=headers) as client:
             response = await client.post(endpoint, json=payload)
-            response.raise_for_status()
-            return response.json()
+            if response.is_error:
+                detail = ""
+                try:
+                    body = response.json()
+                    if isinstance(body, dict):
+                        detail = str(
+                            body.get("message")
+                            or body.get("Message")
+                            or body.get("error")
+                            or body.get("Error")
+                            or body
+                        )
+                    else:
+                        detail = str(body)
+                except Exception:
+                    detail = response.text.strip()
+                detail = detail.replace(settings.enformion_ap_name, "[redacted]")
+                detail = detail.replace(settings.enformion_ap_password, "[redacted]")
+                detail = detail[:1200] or response.reason_phrase
+                raise RuntimeError(
+                    f"EnformionGO HTTP {response.status_code}: {detail}"
+                )
+            try:
+                return response.json()
+            except ValueError as exc:
+                raise RuntimeError("EnformionGO returned a non-JSON response") from exc
 
     async def enformion_person_search(self, payload: dict) -> dict:
         return await self._enformion(
