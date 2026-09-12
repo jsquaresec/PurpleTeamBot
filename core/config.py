@@ -10,10 +10,29 @@ def _int(name: str, default: int = 0) -> int:
     return int(value) if value else default
 
 
+def _int_set(name: str) -> frozenset[int]:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return frozenset()
+
+    values: set[int] = set()
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            values.add(int(item))
+        except ValueError as exc:
+            raise RuntimeError(f"{name} contains an invalid Discord ID: {item!r}") from exc
+
+    return frozenset(values)
+
+
 @dataclass(frozen=True)
 class Settings:
     discord_token: str = os.getenv("DISCORD_TOKEN", "").strip()
     discord_guild_id: int = _int("DISCORD_GUILD_ID")
+    discord_allowed_channel_ids: frozenset[int] = _int_set("DISCORD_ALLOWED_CHANNEL_IDS")
     bot_owner_id: int = _int("BOT_OWNER_ID")
     database_path: str = os.getenv("DATABASE_PATH", "purple_team.db")
     database_url: str = os.getenv("DATABASE_URL", "").strip()
