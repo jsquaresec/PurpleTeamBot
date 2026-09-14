@@ -71,7 +71,6 @@ class RSSState:
 
     def save(self) -> None:
         STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        # Bound the file so it never grows forever.
         values = list(self.seen)[-5000:]
         STATE_PATH.write_text(
             json.dumps({"seeded": self.seeded, "seen": values}, indent=2),
@@ -137,7 +136,7 @@ class CyberNewsRSS:
         embed.set_footer(text="CYBERSPACE // CYBER NEWS • automated public-feed intelligence")
         return embed
 
-    async def check(self, *, force_post_latest: bool = False) -> tuple[int, int]:
+    async def check(self) -> tuple[int, int]:
         async with self._running_check:
             channel = await self.find_channel()
             if channel is None:
@@ -159,18 +158,12 @@ class CyberNewsRSS:
                         if key not in self.state.seen:
                             unseen.append((key, entry))
 
-                    if first_seed and not force_post_latest:
+                    if first_seed:
                         for key, _ in unseen:
                             self.state.seen.add(key)
                         continue
 
-                    if force_post_latest and unseen:
-                        unseen = unseen[:1]
-                    else:
-                        # Feeds normally return newest first; reverse selected slice so
-                        # Discord receives them in chronological order.
-                        unseen = list(reversed(unseen[:MAX_POSTS_PER_FEED_PER_CHECK]))
-
+                    unseen = list(reversed(unseen[:MAX_POSTS_PER_FEED_PER_CHECK]))
                     for key, entry in unseen:
                         try:
                             await channel.send(
@@ -190,6 +183,46 @@ class CyberNewsRSS:
             self.state.save()
             self.last_check = datetime.now(timezone.utc)
             return total_new, feed_successes
+
+    async def push_latest(self) -> tuple[int, int]:
+        """One-time validation push: newest real item from each configured feed.
+
+        This intentionally ignores deduplication for the selected article so an
+        owner can prove the full RSS -> Discord path without resetting state.
+        Normal polling remains deduplicated afterward.
+        """
+        async with self._running_check:
+            channel = await self.find_channel()
+            if channel is None:
+                raise RuntimeError(f"Could not find {CYBER_NEWS_CHANNEL}")
+
+            posted = 0
+            feed_successes = 0
+            self.last_errors = {}
+
+            for source, url in FEEDS:
+                try:
+                    parsed = await self.fetch_feed(source, url)
+                    feed_successes += 1
+                    entries = list(parsed.entries)
+                    if not entries:
+                        self.last_errors[source] = "Feed returned no entries"
+                        continue
+
+                    entry = entries[0]
+                    await channel.send(
+                        embed=self.make_embed(source, entry),
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                    self.state.seen.add(_entry_key(source, entry))
+                    posted += 1
+                except Exception as exc:
+                    self.last_errors[source] = str(exc)[:300]
+
+            self.state.seeded = True
+            self.state.save()
+            self.last_check = datetime.now(timezone.utc)
+            return posted, feed_successes
 
     async def loop(self) -> None:
         await self.bot.wait_until_ready()
@@ -261,6 +294,22 @@ def register_rss_commands(bot: discord.Client) -> None:
             )
         except Exception as exc:
             await interaction.followup.send(f"RSS check failed: `{str(exc)[:1000]}`", ephemeral=True)
+
+    @group.command(name="latest", description="One-time push of the newest article from every RSS feed")
+    @app_commands.guild_only()
+    async def rss_latest(interaction: discord.Interaction):
+        if not await owner_only(interaction):
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        service: CyberNewsRSS = getattr(bot, "cyber_news_rss")
+        try:
+            posted, successes = await service.push_latest()
+            await interaction.followup.send(
+                f"Latest RSS push complete: **{posted}** article(s) posted to `{CYBER_NEWS_CHANNEL}`; **{successes}/{len(FEEDS)}** feeds reached.",
+                ephemeral=True,
+            )
+        except Exception as exc:
+            await interaction.followup.send(f"Latest RSS push failed: `{str(exc)[:1000]}`", ephemeral=True)
 
     @group.command(name="test", description="Post a CyberSpace RSS test card in cyber-news")
     @app_commands.guild_only()
