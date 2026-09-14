@@ -187,22 +187,72 @@ def install_event_stream_logging(bot: discord.Client) -> None:
                 _embed("TIMEOUT UPDATED", f"{after.mention}: {text}", colour=discord.Colour.orange()),
             )
 
-    async def on_message_delete(message: discord.Message) -> None:
-        if message.guild is None or message.author.bot:
+    async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent) -> None:
+        if payload.guild_id is None:
             return
-        target = await _channel(message.guild, "message")
-        if target and message.channel.id == target.id:
+
+        guild = bot.get_guild(payload.guild_id)
+        if guild is None:
+            try:
+                guild = await bot.fetch_guild(payload.guild_id)
+            except discord.HTTPException:
+                return
+
+        target = await _channel(guild, "message")
+        if target and payload.channel_id == target.id:
+            return
+
+        cached = payload.cached_message
+        if cached is not None and cached.author.bot:
+            return
+
+        channel_mention = f"<#{payload.channel_id}>"
+        if cached is not None:
+            description = f"Message by {cached.author.mention} in {channel_mention} was deleted."
+        else:
+            description = f"A message in {channel_mention} was deleted. The message was not cached."
+
+        panel = _embed("MESSAGE DELETED", description, colour=discord.Colour.orange())
+        panel.add_field(name="Message ID", value=f"`{payload.message_id}`", inline=True)
+        panel.add_field(name="Channel ID", value=f"`{payload.channel_id}`", inline=True)
+
+        if cached is not None:
+            panel.add_field(name="Content", value=_clip(cached.content), inline=False)
+            panel.add_field(name="Author ID", value=f"`{cached.author.id}`", inline=True)
+            if cached.attachments:
+                panel.add_field(
+                    name="Attachments",
+                    value="\n".join(a.filename for a in cached.attachments[:8]),
+                    inline=False,
+                )
+        else:
+            panel.add_field(
+                name="Content",
+                value="`not cached — enable Message Content Intent for richer delete logs`",
+                inline=False,
+            )
+
+        await _send(guild, "message", panel)
+
+    async def on_raw_bulk_message_delete(payload: discord.RawBulkMessageDeleteEvent) -> None:
+        if payload.guild_id is None:
+            return
+        guild = bot.get_guild(payload.guild_id)
+        if guild is None:
+            try:
+                guild = await bot.fetch_guild(payload.guild_id)
+            except discord.HTTPException:
+                return
+        target = await _channel(guild, "message")
+        if target and payload.channel_id == target.id:
             return
         panel = _embed(
-            "MESSAGE DELETED",
-            f"Message by {message.author.mention} in {message.channel.mention} was deleted.",
-            colour=discord.Colour.orange(),
+            "BULK MESSAGE DELETE",
+            f"**{len(payload.message_ids)}** messages were deleted from <#{payload.channel_id}>.",
+            colour=discord.Colour.red(),
         )
-        panel.add_field(name="Content", value=_clip(message.content), inline=False)
-        panel.add_field(name="Message ID", value=f"`{message.id}`", inline=True)
-        if message.attachments:
-            panel.add_field(name="Attachments", value="\n".join(a.filename for a in message.attachments[:8]), inline=False)
-        await _send(message.guild, "message", panel)
+        panel.add_field(name="Channel ID", value=f"`{payload.channel_id}`", inline=True)
+        await _send(guild, "message", panel)
 
     async def on_message_edit(before: discord.Message, after: discord.Message) -> None:
         if after.guild is None or after.author.bot or before.content == after.content:
@@ -274,7 +324,8 @@ def install_event_stream_logging(bot: discord.Client) -> None:
         "on_member_ban": on_member_ban,
         "on_member_unban": on_member_unban,
         "on_member_update": on_member_update,
-        "on_message_delete": on_message_delete,
+        "on_raw_message_delete": on_raw_message_delete,
+        "on_raw_bulk_message_delete": on_raw_bulk_message_delete,
         "on_message_edit": on_message_edit,
         "on_voice_state_update": on_voice_state_update,
         "on_guild_channel_create": on_guild_channel_create,
