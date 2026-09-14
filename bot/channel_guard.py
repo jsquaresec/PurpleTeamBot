@@ -13,10 +13,11 @@ async def _deny(interaction: discord.Interaction, title: str, message: str) -> N
 
 
 def install_channel_guard(bot: discord.Client) -> None:
-    """Restrict all application commands to explicitly approved Discord channels.
+    """Restrict application commands to explicitly approved Discord channels.
 
-    The guard fails closed: when no channel IDs are configured, commands are denied
-    instead of silently falling back to unrestricted operation.
+    Normal commands fail closed when no channel IDs are configured. The configured
+    bot owner may use owner-only maintenance commands anywhere inside the authorized
+    guild so recovery/setup operations cannot be stranded by channel changes.
     """
 
     async def interaction_check(interaction: discord.Interaction) -> bool:
@@ -35,6 +36,15 @@ def install_channel_guard(bot: discord.Client) -> None:
                 "Purple Team is not authorized to operate in this Discord server.",
             )
             return False
+
+        command_name = interaction.command.qualified_name if interaction.command else ""
+        is_owner_maintenance = (
+            command_name.startswith("owner ")
+            and settings.bot_owner_id
+            and interaction.user.id == settings.bot_owner_id
+        )
+        if is_owner_maintenance:
+            return True
 
         allowed_channels = settings.discord_allowed_channel_ids
         if not allowed_channels:
@@ -57,5 +67,5 @@ def install_channel_guard(bot: discord.Client) -> None:
 
     # discord.py calls CommandTree.interaction_check before every application
     # command. Replacing it on this tree gives every current and future slash
-    # command the same centralized channel authorization boundary.
+    # command the same centralized authorization boundary.
     bot.tree.interaction_check = interaction_check
