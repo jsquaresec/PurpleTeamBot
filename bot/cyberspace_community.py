@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from io import BytesIO
-from pathlib import Path
 
 import discord
 from discord import app_commands
@@ -20,6 +19,12 @@ SELF_ROLES = [
     ("ctf-player", "🚩", discord.ButtonStyle.success),
     ("mentor", "🤝", discord.ButtonStyle.success),
     ("subscriber", "💗", discord.ButtonStyle.secondary),
+]
+
+TEAM_ROLES = [
+    ("Red Team", "🔴", discord.ButtonStyle.danger),
+    ("Blue Team", "🔵", discord.ButtonStyle.primary),
+    ("Purple Team", "🟣", discord.ButtonStyle.secondary),
 ]
 
 
@@ -58,13 +63,11 @@ def _render_banner(
     image = Image.new("RGB", (width, height), (8, 10, 18))
     draw = ImageDraw.Draw(image)
 
-    # Subtle CyberSpace grid.
     for x in range(0, width, 44):
         draw.line((x, 0, x, height), fill=(20, 24, 42), width=1)
     for y in range(0, height, 44):
         draw.line((0, y, width, y), fill=(20, 24, 42), width=1)
 
-    # Neon network accents.
     purple = (139, 92, 246)
     cyan = (34, 211, 238)
     dim = (81, 52, 144)
@@ -72,13 +75,11 @@ def _render_banner(
     draw.line((35, 80, width - 35, 80), fill=dim, width=2)
     draw.line((35, height - 52, width - 35, height - 52), fill=(18, 76, 86), width=2)
 
-    # Terminal decorations.
     draw.ellipse((48, 45, 60, 57), fill=(239, 68, 68))
     draw.ellipse((68, 45, 80, 57), fill=(234, 179, 8))
     draw.ellipse((88, 45, 100, 57), fill=(34, 197, 94))
     draw.text((120, 38), "CYBERSPACE // ENTRY NODE", font=_font(22, bold=True), fill=cyan)
 
-    # Avatar with neon ring.
     avatar_size = 205
     avatar_xy = (58, 105)
     ring_box = (
@@ -114,12 +115,11 @@ def _render_banner(
     draw.text((text_x, 213), display_name, font=name_font, fill=purple)
 
     if joined:
-        footer = f"NODE #{member_count:04d}  //  identity synchronized  //  access granted"
+        footer = f"NODE #{member_count:04d}  //  choose your team  //  access granted"
     else:
         footer = f"{member_count:04d} active nodes remain  //  session closed"
     draw.text((text_x, 274), footer, font=_font(21), fill=(160, 170, 194))
 
-    # Soft glow pass on a copy of the accents.
     glow = Image.new("RGBA", image.size, (0, 0, 0, 0))
     glow_draw = ImageDraw.Draw(glow)
     glow_draw.rounded_rectangle((18, 18, width - 18, height - 18), radius=30, outline=(*purple, 120), width=9)
@@ -143,6 +143,98 @@ async def _find_text_channel(guild: discord.Guild, name: str) -> discord.TextCha
     return None
 
 
+async def _resolve_member(interaction: discord.Interaction) -> discord.Member | None:
+    if interaction.guild is None:
+        return None
+    member = interaction.user if isinstance(interaction.user, discord.Member) else None
+    if member is None:
+        try:
+            member = await interaction.guild.fetch_member(interaction.user.id)
+        except discord.HTTPException:
+            return None
+    try:
+        member = await interaction.guild.fetch_member(member.id)
+    except discord.HTTPException:
+        pass
+    return member
+
+
+class TeamButton(discord.ui.Button):
+    def __init__(self, role_name: str, emoji: str, style: discord.ButtonStyle):
+        super().__init__(
+            label=role_name,
+            emoji=emoji,
+            style=style,
+            custom_id=f"cyberspace:team:{role_name.lower().replace(' ', '-')}",
+        )
+        self.role_name = role_name
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None:
+            await interaction.response.send_message("This button only works inside CyberSpace.", ephemeral=True)
+            return
+
+        member = await _resolve_member(interaction)
+        if member is None:
+            await interaction.response.send_message("Could not resolve your server membership.", ephemeral=True)
+            return
+
+        try:
+            roles = await interaction.guild.fetch_roles()
+        except discord.HTTPException as exc:
+            await interaction.response.send_message(f"Could not load roles: {exc}", ephemeral=True)
+            return
+
+        team_names = {name for name, _, _ in TEAM_ROLES}
+        role_by_name = {role.name: role for role in roles if role.name in team_names}
+        selected = role_by_name.get(self.role_name)
+        if selected is None:
+            await interaction.response.send_message(
+                f"The `{self.role_name}` role does not exist yet. Ask an administrator to create it.",
+                ephemeral=True,
+            )
+            return
+
+        current_ids = {role.id for role in member.roles}
+        if selected.id in current_ids:
+            await interaction.response.send_message(
+                f"{self.emoji} You are already connected to **{self.role_name}**.",
+                ephemeral=True,
+            )
+            return
+
+        old_teams = [
+            role for name, role in role_by_name.items()
+            if name != self.role_name and role.id in current_ids
+        ]
+
+        try:
+            if old_teams:
+                await member.remove_roles(*old_teams, reason="CyberSpace team selection changed")
+            await member.add_roles(selected, reason="CyberSpace team selection")
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "Demon Scope cannot manage the team roles. Move its bot role above Red Team, Blue Team, and Purple Team.",
+                ephemeral=True,
+            )
+            return
+        except discord.HTTPException as exc:
+            await interaction.response.send_message(f"Team selection failed: {exc}", ephemeral=True)
+            return
+
+        await interaction.response.send_message(
+            f"{self.emoji} **{self.role_name} selected.** Your CyberSpace team identity has been updated.",
+            ephemeral=True,
+        )
+
+
+class TeamSelectView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        for role_name, emoji, style in TEAM_ROLES:
+            self.add_item(TeamButton(role_name, emoji, style))
+
+
 async def _send_member_banner(member: discord.Member, *, joined: bool) -> None:
     channel = await _find_text_channel(member.guild, WELCOME_CHANNEL)
     if channel is None:
@@ -156,7 +248,6 @@ async def _send_member_banner(member: discord.Member, *, joined: bool) -> None:
 
     count = member.guild.member_count or 0
     if not joined and count > 0:
-        # Discord's cached count can briefly still include the leaving member.
         count = max(0, count - 1)
 
     banner = await asyncio.to_thread(
@@ -167,16 +258,38 @@ async def _send_member_banner(member: discord.Member, *, joined: bool) -> None:
         joined=joined,
     )
     filename = "cyberspace-welcome.png" if joined else "cyberspace-departure.png"
+    attachment = discord.File(banner, filename=filename)
 
     if joined:
-        content = f"**{member.mention} connected to CyberSpace.**  Read `📜・protocols`, then choose your identity roles."
+        embed = discord.Embed(
+            title="CYBERSPACE // ENTRY NODE ONLINE",
+            description=(
+                f"Welcome {member.mention}. Your connection to **CyberSpace** has been established.\n\n"
+                "Choose your operational path below. Your team selection can be changed later by pressing another button.\n\n"
+                "🔴 **Red Team** — offensive security & adversary simulation\n"
+                "🔵 **Blue Team** — defense, detection & incident response\n"
+                "🟣 **Purple Team** — offensive + defensive collaboration"
+            ),
+            colour=discord.Colour.from_rgb(139, 92, 246),
+        )
+        embed.set_image(url=f"attachment://{filename}")
+        embed.set_footer(text=f"CyberSpace Entry Node • Member {count}")
+        try:
+            await channel.send(embed=embed, file=attachment, view=TeamSelectView())
+        except discord.HTTPException:
+            pass
     else:
-        content = f"**{member.display_name} disconnected from CyberSpace.**"
-
-    try:
-        await channel.send(content=content, file=discord.File(banner, filename=filename))
-    except discord.HTTPException:
-        pass
+        embed = discord.Embed(
+            title="CYBERSPACE // NODE DISCONNECTED",
+            description=f"**{member.display_name}** has disconnected from CyberSpace.",
+            colour=discord.Colour.from_rgb(99, 102, 241),
+        )
+        embed.set_image(url=f"attachment://{filename}")
+        embed.set_footer(text=f"CyberSpace Network • {count} active nodes remain")
+        try:
+            await channel.send(embed=embed, file=attachment)
+        except discord.HTTPException:
+            pass
 
 
 class SelfRoleButton(discord.ui.Button):
@@ -209,19 +322,10 @@ class SelfRoleButton(discord.ui.Button):
             )
             return
 
-        member = interaction.user if isinstance(interaction.user, discord.Member) else None
+        member = await _resolve_member(interaction)
         if member is None:
-            try:
-                member = await interaction.guild.fetch_member(interaction.user.id)
-            except discord.HTTPException:
-                await interaction.response.send_message("Could not resolve your server membership.", ephemeral=True)
-                return
-
-        # Fetch the member so the role list is authoritative even with a small cache.
-        try:
-            member = await interaction.guild.fetch_member(member.id)
-        except discord.HTTPException:
-            pass
+            await interaction.response.send_message("Could not resolve your server membership.", ephemeral=True)
+            return
 
         has_role = any(item.id == role.id for item in member.roles)
         try:
@@ -281,6 +385,7 @@ def _role_panel_embed() -> discord.Embed:
 
 def install_cyberspace_community(bot: discord.Client) -> None:
     bot.add_view(SelfRoleView())
+    bot.add_view(TeamSelectView())
 
     async def on_member_join(member: discord.Member) -> None:
         await _send_member_banner(member, joined=True)
@@ -318,5 +423,14 @@ def register_cyberspace_community_commands(bot: discord.Client) -> None:
         await interaction.response.send_message(
             f"Self-role panel posted in {channel.mention}.", ephemeral=True
         )
+
+    @group.command(name="welcome-preview", description="Post a preview of the CyberSpace welcome card")
+    @app_commands.guild_only()
+    async def welcome_preview(interaction: discord.Interaction):
+        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+            return
+        await interaction.response.defer(ephemeral=True)
+        await _send_member_banner(interaction.user, joined=True)
+        await interaction.followup.send("Welcome card preview posted.", ephemeral=True)
 
     bot.tree.add_command(group)
