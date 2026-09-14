@@ -1,3 +1,5 @@
+import re
+
 import discord
 from discord import app_commands
 
@@ -15,33 +17,76 @@ from bot.ui import make_embed
 from core.config import settings
 
 
-async def _resolve_bot_member_and_top_role(
+ROLE_NAME_FALLBACK = "[ Demon Scope ]"
+
+
+def _normalize_role_name(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+
+
+async def _resolve_bot_top_role(
     guild: discord.Guild,
     bot_user_id: int,
-) -> tuple[discord.Member, discord.Role]:
-    """Fetch the bot member from Discord and resolve its real highest assigned role."""
-    member = guild.get_member(bot_user_id)
-    if member is None or len(member.roles) <= 1:
-        member = await guild.fetch_member(bot_user_id)
+    bot_display_name: str = "",
+) -> discord.Role:
+    """Resolve Purple Team's highest controlling role from fresh Discord role data.
 
-    assigned_roles = [role for role in member.roles if role != guild.default_role]
-    if not assigned_roles:
-        raise RuntimeError(
-            "Purple Team has no assigned Discord role above @everyone. "
-            "Give the bot a role with Administrator and place it near the top of the role list."
-        )
+    This intentionally avoids member-cache dependence because Purple Team currently
+    runs with Intents.none().
+    """
+    roles = await guild.fetch_roles()
 
-    return member, max(assigned_roles, key=lambda role: role.position)
+    # Best case: Discord marks the managed integration role with this bot's ID.
+    tagged = []
+    for role in roles:
+        if not role.managed:
+            continue
+        tags = getattr(role, "tags", None)
+        if tags is not None and getattr(tags, "bot_id", None) == bot_user_id:
+            tagged.append(role)
+    if tagged:
+        return max(tagged, key=lambda role: role.position)
+
+    # This deployment uses a manually positioned Administrator role named
+    # "[ Demon Scope ]". Resolve it directly from fresh guild role data.
+    exact = discord.utils.get(roles, name=ROLE_NAME_FALLBACK)
+    if exact is not None:
+        return exact
+
+    # Tolerate cosmetic brackets/spacing and a future rename matching the bot's
+    # display name, while still requiring an Administrator-capable role.
+    wanted_names = {_normalize_role_name(ROLE_NAME_FALLBACK)}
+    if bot_display_name:
+        wanted_names.add(_normalize_role_name(bot_display_name))
+
+    candidates = [
+        role
+        for role in roles
+        if role != guild.default_role
+        and _normalize_role_name(role.name) in wanted_names
+        and role.permissions.administrator
+    ]
+    if candidates:
+        return max(candidates, key=lambda role: role.position)
+
+    raise RuntimeError(
+        "Purple Team could not resolve its Discord control role. Expected the role "
+        f"`{ROLE_NAME_FALLBACK}` near the top of the role list."
+    )
 
 
 async def _preflight_replace(
     guild: discord.Guild,
-    template: dict,
     *,
     bot_user_id: int,
+    bot_display_name: str,
     effective_permissions: discord.Permissions,
 ) -> discord.Role:
-    _, top_role = await _resolve_bot_member_and_top_role(guild, bot_user_id)
+    top_role = await _resolve_bot_top_role(
+        guild,
+        bot_user_id,
+        bot_display_name,
+    )
 
     if not (
         effective_permissions.administrator
@@ -52,11 +97,13 @@ async def _preflight_replace(
             "before it can replace the server layout."
         )
 
+    fresh_roles = await guild.fetch_roles()
     blocked_roles = [
         role.name
-        for role in guild.roles
+        for role in fresh_roles
         if role != guild.default_role
         and not role.managed
+        and role.id != top_role.id
         and role.position >= top_role.position
     ]
     if blocked_roles:
@@ -64,15 +111,8 @@ async def _preflight_replace(
         extra = " ..." if len(blocked_roles) > 8 else ""
         raise RuntimeError(
             "Purple Team cannot delete one or more existing roles because they are at or above "
-            f"its highest assigned role ({top_role.name}): {preview}{extra}. "
-            "Move Purple Team's highest role above them first."
-        )
-
-    role_count = len(template.get("roles", []))
-    if top_role.position - 1 < role_count:
-        raise RuntimeError(
-            f"Purple Team's highest role ({top_role.name}) is not high enough to place all "
-            f"{role_count} J2 roles beneath it. Move the Purple Team role higher and try again."
+            f"its control role ({top_role.name}): {preview}{extra}. "
+            "Move the Demon Scope role above them first."
         )
 
     return top_role
@@ -82,17 +122,26 @@ async def install_private_template_v2(
     guild: discord.Guild,
     *,
     bot_user_id: int,
+    bot_display_name: str,
     effective_permissions: discord.Permissions,
 ) -> dict[str, int]:
     data = _load_template()
     bot_role = await _preflight_replace(
         guild,
-        data,
         bot_user_id=bot_user_id,
+        bot_display_name=bot_display_name,
         effective_permissions=effective_permissions,
     )
 
     wipe_stats = await _wipe_existing_layout(guild, bot_role=bot_role)
+
+    # Role positions change as existing roles are deleted. Resolve the controlling
+    # role again from Discord before creating/reordering the J2 hierarchy.
+    bot_role = await _resolve_bot_top_role(
+        guild,
+        bot_user_id,
+        bot_display_name,
+    )
     role_map = await _ensure_roles(guild, data["roles"], bot_role=bot_role)
 
     created_categories = 0
@@ -205,12 +254,13 @@ def register_owner_template_commands_v2(bot: discord.Client) -> None:
             )
             return
 
+        bot_display_name = interaction.client.user.display_name
+
         try:
-            data = _load_template()
             await _preflight_replace(
                 interaction.guild,
-                data,
                 bot_user_id=interaction.client.user.id,
+                bot_display_name=bot_display_name,
                 effective_permissions=interaction.app_permissions,
             )
         except Exception as exc:
@@ -237,6 +287,7 @@ def register_owner_template_commands_v2(bot: discord.Client) -> None:
             result = await install_private_template_v2(
                 interaction.guild,
                 bot_user_id=interaction.client.user.id,
+                bot_display_name=bot_display_name,
                 effective_permissions=interaction.app_permissions,
             )
             description = (
