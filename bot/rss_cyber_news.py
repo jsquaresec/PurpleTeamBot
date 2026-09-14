@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import calendar
 import hashlib
 import html
 import json
@@ -29,6 +30,14 @@ FEEDS = [
     ("Dark Reading", "https://www.darkreading.com/rss.xml"),
 ]
 
+SOURCE_CODES = {
+    "BleepingComputer": "BC",
+    "The Hacker News": "THN",
+    "CISA Advisories": "CISA",
+    "Krebs on Security": "KREBS",
+    "Dark Reading": "DR",
+}
+
 _TAG_RE = re.compile(r"<[^>]+>")
 _SPACE_RE = re.compile(r"\s+")
 
@@ -51,8 +60,26 @@ def _entry_key(source: str, entry) -> str:
     return hashlib.sha256(f"{source}|{raw}".encode("utf-8", "ignore")).hexdigest()
 
 
-def _published_text(entry) -> str:
-    return str(entry.get("published") or entry.get("updated") or "Unknown")[:120]
+def _published_datetime(entry) -> datetime | None:
+    parsed = entry.get("published_parsed") or entry.get("updated_parsed")
+    if not parsed:
+        return None
+    try:
+        return datetime.fromtimestamp(calendar.timegm(parsed), tz=timezone.utc)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _published_display(entry) -> str:
+    published = _published_datetime(entry)
+    if published is not None:
+        return discord.utils.format_dt(published, style="R")
+    return _clean(str(entry.get("published") or entry.get("updated") or "Unknown"), 90)
+
+
+def _intel_id(source: str, entry) -> str:
+    code = SOURCE_CODES.get(source, "RSS")
+    return f"{code}-{_entry_key(source, entry)[:6].upper()}"
 
 
 class RSSState:
@@ -117,23 +144,66 @@ class CyberNewsRSS:
         return parsed
 
     def make_embed(self, source: str, entry) -> discord.Embed:
-        title = _clean(str(entry.get("title") or "Untitled cyber news item"), 240)
+        title = _clean(str(entry.get("title") or "Untitled cyber news item"), 220)
         link = str(entry.get("link") or "").strip()
-        summary = _clean(str(entry.get("summary") or entry.get("description") or ""), 850)
+        summary = _clean(str(entry.get("summary") or entry.get("description") or ""), 720)
+        published = _published_datetime(entry)
+        intel_id = _intel_id(source, entry)
 
         embed = discord.Embed(
-            title=title,
+            title=f"◈ {title}",
             url=link or None,
-            description=summary,
+            description=(
+                "```ansi\n"
+                "\u001b[1;35mCYBERSPACE // INCOMING INTEL\u001b[0m\n"
+                "\u001b[2;36mPUBLIC FEED INTERCEPTED // SIGNAL VERIFIED\u001b[0m\n"
+                "```\n"
+                f"> {summary}"
+            ),
             colour=discord.Colour.from_rgb(139, 92, 246),
-            timestamp=datetime.now(timezone.utc),
+            timestamp=published or datetime.now(timezone.utc),
         )
-        embed.add_field(name="Source", value=source, inline=True)
-        embed.add_field(name="Published", value=_published_text(entry), inline=True)
-        embed.add_field(name="Classification", value="Public RSS / Atom", inline=True)
+
+        embed.add_field(
+            name="◢ SOURCE NODE",
+            value=f"`{source}`",
+            inline=True,
+        )
+        embed.add_field(
+            name="◢ INTEL CLASS",
+            value="`PUBLIC // RSS`",
+            inline=True,
+        )
+        embed.add_field(
+            name="◢ PUBLISHED",
+            value=_published_display(entry),
+            inline=True,
+        )
+        embed.add_field(
+            name="◢ INTEL ID",
+            value=f"`{intel_id}`",
+            inline=True,
+        )
+        embed.add_field(
+            name="◢ STATUS",
+            value="`NEW // VERIFIED`",
+            inline=True,
+        )
+        embed.add_field(
+            name="◢ ROUTE",
+            value="`CYBER NEWS`",
+            inline=True,
+        )
+
         if link:
-            embed.add_field(name="Article", value=f"[Open source article]({link})", inline=False)
-        embed.set_footer(text="CYBERSPACE // CYBER NEWS • automated public-feed intelligence")
+            embed.add_field(
+                name="ACCESS NODE",
+                value=f"**[OPEN SOURCE INTELLIGENCE ↗]({link})**",
+                inline=False,
+            )
+
+        embed.set_author(name="CYBERSPACE // NEWSWIRE INTELLIGENCE")
+        embed.set_footer(text=f"DEMON SCOPE • RSS INTEL SERVICE • {intel_id}")
         return embed
 
     async def check(self) -> tuple[int, int]:
