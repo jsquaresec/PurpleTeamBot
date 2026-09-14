@@ -16,8 +16,8 @@ def install_channel_guard(bot: discord.Client) -> None:
     """Restrict application commands to explicitly approved Discord channels.
 
     Normal commands fail closed when no channel IDs are configured. The configured
-    bot owner may use owner-only maintenance commands anywhere inside the authorized
-    guild so recovery/setup operations cannot be stranded by channel changes.
+    bot owner may use maintenance/setup commands anywhere inside the authorized
+    guild so recovery operations are not stranded after channel replacement.
     """
 
     async def interaction_check(interaction: discord.Interaction) -> bool:
@@ -37,13 +37,10 @@ def install_channel_guard(bot: discord.Client) -> None:
             )
             return False
 
-        command_name = interaction.command.qualified_name if interaction.command else ""
-        is_owner_maintenance = (
-            command_name.startswith("owner ")
-            and settings.bot_owner_id
-            and interaction.user.id == settings.bot_owner_id
-        )
-        if is_owner_maintenance:
+        # The configured bot owner may run recovery/setup commands anywhere in the
+        # authorized guild. This is important after destructive template installs,
+        # because channel IDs change and the old allowlist can no longer match.
+        if settings.bot_owner_id and interaction.user.id == settings.bot_owner_id:
             return True
 
         allowed_channels = settings.discord_allowed_channel_ids
