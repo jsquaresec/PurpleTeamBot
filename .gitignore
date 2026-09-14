@@ -5,3 +5,8 @@ __pycache__/
 *.db
 .pytest_cache/
 .DS_Store
+
+# Private Purple Team/J2 server blueprints. Never commit these files.
+private/
+*.private.json
+*.private.py
