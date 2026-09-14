@@ -4,6 +4,7 @@ import discord
 
 from bot.channel_guard import install_channel_guard
 from bot.client import PurpleTeamBot
+from bot.cyberspace_community import install_cyberspace_community, register_cyberspace_community_commands
 from bot.daily_snapshot import install_daily_snapshot, register_snapshot_command
 from bot.extra_commands import register_extra_commands
 from bot.free_person_commands import register_free_person_commands
@@ -57,12 +58,20 @@ class FreeStackPurpleTeamBot(PurpleTeamBot):
 
 async def main() -> None:
     bot = FreeStackPurpleTeamBot()
+
+    # Welcome/leave events require guild + member events. The privileged Members
+    # intent must also be enabled for the application in Discord Developer Portal.
+    bot.intents.guilds = True
+    bot.intents.members = True
+
     install_channel_guard(bot)
     register_extra_commands(bot)
     register_provider_commands(bot)
     register_security_commands(bot)
     register_snapshot_command(bot)
     register_owner_template_commands_v2(bot)
+    register_cyberspace_community_commands(bot)
+    install_cyberspace_community(bot)
     install_daily_snapshot(bot)
     await bot.start_bot()
 
