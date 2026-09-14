@@ -42,7 +42,17 @@ def can_use_person_search(interaction: discord.Interaction) -> bool:
 
 class PurpleTeamBot(commands.Bot):
     def __init__(self) -> None:
-        super().__init__(command_prefix="!", intents=discord.Intents.none())
+        # CyberSpace community + event-stream logging needs these gateway events.
+        # Members and Message Content must also be enabled in the Discord Developer
+        # Portal under Privileged Gateway Intents.
+        intents = discord.Intents.none()
+        intents.guilds = True
+        intents.members = True
+        intents.moderation = True
+        intents.voice_states = True
+        intents.messages = True
+        intents.message_content = True
+        super().__init__(command_prefix="!", intents=intents)
 
     async def setup_hook(self) -> None:
         await init_db()
@@ -277,101 +287,10 @@ class PurpleTeamBot(commands.Bot):
                 panel.add_field(name="📌 State", value=str(meta.get('state', 'Unknown')), inline=True)
                 panel.add_field(name="📈 EPSS", value=str((epss or {}).get('epss', 'n/a')), inline=True)
                 panel.add_field(name="🎯 EPSS Percentile", value=str((epss or {}).get('percentile', 'n/a')), inline=True)
-                panel.add_field(name="🚨 CISA KEV", value="**YES — Known Exploited**" if kev else "No", inline=False)
-                if kev:
-                    panel.add_field(name="🛡️ Required Action", value=str(kev.get('requiredAction', 'See CISA KEV'))[:1024], inline=False)
+                panel.add_field(name="🚨 CISA KEV", value="Listed" if kev else "Not listed", inline=True)
                 await interaction.followup.send(embed=panel)
             except Exception as exc:
-                await interaction.followup.send(embed=embed("Vulnerability Lookup Failed", str(exc), kind="error"), ephemeral=True)
+                await interaction.followup.send(embed=embed("Vulnerability Intelligence Failed", str(exc), kind="error"), ephemeral=True)
 
-        @self.tree.command(name="investigate", description="Run passive domain intelligence and, when authorized, a lightweight active scan")
-        async def investigate(interaction: discord.Interaction, target: str):
-            gid = guild_id(interaction)
-            target = normalize_target(target)
-            await interaction.response.defer(thinking=True)
-            sections = []
-            try:
-                dns_data = await passive_service.dns_records(target)
-                sections.append("**DNS:** " + ", ".join(dns_data.get("A", [])[:5]))
-            except Exception:
-                sections.append("**DNS:** unavailable")
-            try:
-                names = await passive_service.certificate_names(target)
-                sections.append(f"**Certificate names:** {len(names)}")
-            except Exception:
-                sections.append("**Certificate names:** unavailable")
-            try:
-                http_data = await passive_service.http_probe(target)
-                sections.append(f"**HTTP:** {http_data.get('status')} • {http_data.get('server') or 'server hidden'}")
-                missing = [k for k, v in http_data.get("security_headers", {}).items() if not v]
-                sections.append(f"**Missing security headers:** {len(missing)}")
-            except Exception:
-                sections.append("**HTTP:** unavailable")
-            active_scoped = await target_in_scope(gid, target)
-            if active_scoped:
-                try:
-                    result = await nmap_service.quick_scan(target)
-                    sections.append("**Open selected ports:** " + (", ".join(str(p.port) for p in result.ports) or "none"))
-                    await record_scan(gid, interaction.user.id, target, "investigate", "ok", ",".join(str(p.port) for p in result.ports))
-                except Exception as exc:
-                    sections.append(f"**Active scan:** {exc}")
-            else:
-                sections.append("**Active scan:** skipped — target not in authorized scope")
-            panel = embed("Investigation Summary", f"Combined passive intelligence for `{target}`.", kind="info")
-            panel.add_field(name="🔎 Findings", value="\n".join(sections)[:1024], inline=False)
-            panel.add_field(name="🛡️ Active Assessment", value="🟢 Authorized" if active_scoped else "⚫ Not in scope — passive only", inline=False)
-            await interaction.followup.send(embed=panel)
-
-        @self.tree.command(name="history", description="Show recent scan history for this server")
-        async def history(interaction: discord.Interaction):
-            rows = await recent_history(guild_id(interaction), 10)
-            text = "\n".join(f"`{r[0]}`  •  {r[1]}  •  **{r[2]}**  •  {r[3]}" for r in rows) or "No scan history yet."
-            panel = embed("Assessment History", "Recent authorized assessment activity for this Discord server.", kind="info")
-            panel.add_field(name="🗂️ Recent Runs", value=text[:1024], inline=False)
-            await interaction.response.send_message(embed=panel, ephemeral=True)
-
-        @self.tree.command(name="status", description="Show Purple Team runtime and configured integrations")
-        async def status(interaction: discord.Interaction):
-            db = await database_status()
-            panel = embed(
-                "Operations Status",
-                "**Security operations platform is online and ready.**\nRuntime health, assessment capacity, storage, and provider connectivity are shown below.",
-                kind="success",
-            )
-            panel.add_field(name="⚙️ Runtime", value=f"Python  `{platform.python_version()}`\nWorker  `Online`", inline=True)
-            panel.add_field(name="🎯 Assessment", value=f"Concurrent scans  `{settings.max_active_scans}`\nScope enforcement  `Enabled`", inline=True)
-            panel.add_field(name="🗄️ Storage", value=f"Backend  `{db['backend']}`\n{db['detail'][:80]}", inline=True)
-            panel.add_field(
-                name="🌐 Configured Intelligence Providers",
-                value="\n".join([
-                    status_dot(bool(settings.enformion_ap_name and settings.enformion_ap_password), label="**EnformionGO**"),
-                    status_dot(bool(settings.virustotal_api_key), label="**VirusTotal**"),
-                    status_dot(bool(settings.abuseipdb_api_key), label="**AbuseIPDB**"),
-                    status_dot(bool(settings.censys_pat), label="**Censys**"),
-                    status_dot(bool(settings.urlscan_api_key), label="**urlscan.io**"),
-                    status_dot(bool(settings.otx_api_key), label="**AlienVault OTX**"),
-                ]),
-                inline=False,
-            )
-            panel.add_field(
-                name="🧠 Free / Built-in Intelligence",
-                value="\n".join([
-                    always_status("**XposedOrNot**"),
-                    always_status("**HIBP Pwned Passwords**"),
-                    always_status("**FIRST EPSS**"),
-                    always_status("**CISA KEV**"),
-                    always_status("**crt.sh / DNS / RDAP**"),
-                    always_status("**Public Profile OSINT**"),
-                    local_status("**Nmap Engine**"),
-                ]),
-                inline=False,
-            )
-            panel.add_field(name="🛡️ Security Mode", value="Active scanning requires explicit server scope authorization. Person and breach intelligence remain permission-gated and audited.", inline=False)
-            await interaction.response.send_message(embed=panel, ephemeral=True)
-
-        self.tree.add_command(scope)
-        self.tree.add_command(scan)
-        self.tree.add_command(osint)
-        self.tree.add_command(person)
-        self.tree.add_command(intel)
-        self.tree.add_command(vuln)
+        for group in (scope, scan, osint, person, intel, vuln):
+            self.tree.add_command(group)
