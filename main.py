@@ -2,6 +2,7 @@ import asyncio
 
 import discord
 
+from bot.almighty_purple_loader import register_almighty_purple_loader
 from bot.channel_guard import install_channel_guard
 from bot.client import PurpleTeamBot
 from bot.csec_access import register_csec_access_commands
@@ -72,6 +73,7 @@ async def main() -> None:
     register_snapshot_command(bot)
     register_owner_template_commands_v2(bot)
     register_csec_access_commands(bot)
+    register_almighty_purple_loader(bot)
     register_cyberspace_community_commands(bot)
     install_cyberspace_community(bot)
     install_daily_snapshot(bot)
