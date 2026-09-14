@@ -48,11 +48,20 @@ def _overwrite_from_spec(spec: dict[str, Any]) -> discord.PermissionOverwrite:
         payload[name] = True
     for name in spec.get("deny", []):
         payload[name] = False
-    return discord.PermissionOverwrite(**payload)
+    try:
+        return discord.PermissionOverwrite(**payload)
+    except TypeError as exc:
+        raise RuntimeError(f"Invalid channel permission in private template: {exc}") from exc
 
 
-def _build_overwrites(guild: discord.Guild, role_map: dict[str, discord.Role], spec: dict[str, Any] | None) -> dict[discord.abc.Snowflake, discord.PermissionOverwrite]:
-    result: dict[discord.abc.Snowflake, discord.PermissionOverwrite] = {}
+def _build_overwrites(
+    guild: discord.Guild,
+    role_map: dict[str, discord.Role],
+    spec: dict[str, Any] | None,
+    *,
+    base: dict[discord.abc.Snowflake, discord.PermissionOverwrite] | None = None,
+) -> dict[discord.abc.Snowflake, discord.PermissionOverwrite]:
+    result = dict(base or {})
     for target, overwrite_spec in (spec or {}).items():
         if target == "@everyone":
             result[guild.default_role] = _overwrite_from_spec(overwrite_spec)
@@ -113,7 +122,11 @@ async def _ensure_roles(guild: discord.Guild, definitions: list[dict[str, Any]])
     return role_map
 
 
-async def _ensure_category(guild: discord.Guild, name: str, overwrites: dict[discord.abc.Snowflake, discord.PermissionOverwrite]) -> tuple[discord.CategoryChannel, bool]:
+async def _ensure_category(
+    guild: discord.Guild,
+    name: str,
+    overwrites: dict[discord.abc.Snowflake, discord.PermissionOverwrite],
+) -> tuple[discord.CategoryChannel, bool]:
     existing = discord.utils.get(guild.categories, name=name)
     if existing is None:
         return await guild.create_category(name=name, overwrites=overwrites, reason="Purple Team private J2 template install"), True
@@ -121,11 +134,27 @@ async def _ensure_category(guild: discord.Guild, name: str, overwrites: dict[dis
     return existing, False
 
 
-async def _ensure_channel(guild: discord.Guild, category: discord.CategoryChannel, item: dict[str, Any], overwrites: dict[discord.abc.Snowflake, discord.PermissionOverwrite]) -> tuple[discord.abc.GuildChannel, bool]:
+async def _ensure_channel(
+    guild: discord.Guild,
+    category: discord.CategoryChannel,
+    item: dict[str, Any],
+    overwrites: dict[discord.abc.Snowflake, discord.PermissionOverwrite],
+) -> tuple[discord.abc.GuildChannel, bool]:
     name = item["name"]
     kind = item.get("type", "text")
     existing = discord.utils.get(category.channels, name=name)
     topic = item.get("topic")
+
+    expected_types = {
+        "text": discord.TextChannel,
+        "voice": discord.VoiceChannel,
+        "forum": discord.ForumChannel,
+    }
+    expected = expected_types.get(kind)
+    if expected is None:
+        raise RuntimeError(f"Unsupported channel type {kind!r} for {name!r}.")
+    if existing is not None and not isinstance(existing, expected):
+        raise RuntimeError(f"Channel {name!r} already exists with the wrong Discord channel type.")
 
     if existing is not None:
         kwargs: dict[str, Any] = {"overwrites": overwrites, "reason": "Purple Team private J2 template sync"}
@@ -162,7 +191,12 @@ async def install_private_template(guild: discord.Guild) -> dict[str, int]:
         await category.edit(position=category_index, reason="Purple Team J2 category order")
 
         for channel_index, channel_spec in enumerate(category_spec.get("channels", [])):
-            channel_overwrites = _build_overwrites(guild, role_map, channel_spec.get("overwrites"))
+            channel_overwrites = _build_overwrites(
+                guild,
+                role_map,
+                channel_spec.get("overwrites"),
+                base=category_overwrites,
+            )
             channel, was_created = await _ensure_channel(guild, category, channel_spec, channel_overwrites)
             created_channels += int(was_created)
             await channel.edit(position=channel_index, reason="Purple Team J2 channel order")
@@ -170,8 +204,8 @@ async def install_private_template(guild: discord.Guild) -> dict[str, int]:
     root_role = role_map.get(data.get("root_role", "root"))
     if root_role is not None:
         try:
-            owner = guild.get_member(guild.owner_id) or await guild.fetch_member(guild.owner_id)
-            await owner.add_roles(root_role, reason="Purple Team J2 owner/root mapping")
+            owner_member = guild.get_member(guild.owner_id) or await guild.fetch_member(guild.owner_id)
+            await owner_member.add_roles(root_role, reason="Purple Team J2 owner/root mapping")
         except discord.HTTPException:
             pass
 
@@ -190,6 +224,7 @@ def register_owner_template_commands(bot: discord.Client) -> None:
     )
 
     @owner.command(name="template-install", description="Install or repair the private J2 Discord server template")
+    @app_commands.guild_only()
     async def template_install(interaction: discord.Interaction, confirm: bool = False):
         if not settings.bot_owner_id or interaction.user.id != settings.bot_owner_id:
             await interaction.response.send_message(
