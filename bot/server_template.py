@@ -10,6 +10,7 @@ from core.config import settings
 
 
 DEFAULT_TEMPLATE_PATH = Path("private/j2_server_template.json")
+REPLACE_CONFIRMATION = "REPLACE"
 
 
 def _load_template() -> dict[str, Any]:
@@ -71,6 +72,86 @@ def _build_overwrites(
             raise RuntimeError(f"Template references missing role {target!r} in permission overwrites.")
         result[role] = _overwrite_from_spec(overwrite_spec)
     return result
+
+
+def _preflight_replace(guild: discord.Guild, template: dict[str, Any]) -> None:
+    me = guild.me
+    if me is None:
+        raise RuntimeError("Purple Team member object is unavailable in this guild.")
+
+    perms = me.guild_permissions
+    if not (perms.administrator or (perms.manage_channels and perms.manage_roles)):
+        raise RuntimeError(
+            "Purple Team needs Administrator, or both Manage Channels and Manage Roles, "
+            "before it can replace the server layout."
+        )
+
+    blocked_roles = [
+        role.name
+        for role in guild.roles
+        if role != guild.default_role
+        and not role.managed
+        and role >= me.top_role
+    ]
+    if blocked_roles:
+        preview = ", ".join(blocked_roles[:8])
+        extra = " ..." if len(blocked_roles) > 8 else ""
+        raise RuntimeError(
+            "Purple Team cannot delete one or more existing roles because they are at or above "
+            f"its highest role: {preview}{extra}. Move the Purple Team role above them first."
+        )
+
+    role_count = len(template.get("roles", []))
+    if me.top_role.position - 1 < role_count:
+        raise RuntimeError(
+            "Purple Team's role is not high enough to place the full J2 role hierarchy. "
+            "Move the Purple Team bot role higher and run the command again."
+        )
+
+
+async def _wipe_existing_layout(guild: discord.Guild) -> dict[str, int]:
+    """Delete all deletable user-created channels and roles.
+
+    Discord-managed roles, bot/integration roles, and @everyone are intentionally
+    preserved because the API does not allow bots to delete them.
+    """
+    deleted_channels = 0
+    deleted_categories = 0
+    deleted_roles = 0
+
+    # Delete ordinary channels first, then categories. Deleting a category does
+    # not automatically delete its children, so this ordering avoids orphans.
+    ordinary_channels = [c for c in guild.channels if not isinstance(c, discord.CategoryChannel)]
+    categories = list(guild.categories)
+
+    for channel in ordinary_channels:
+        await channel.delete(reason="Purple Team J2 full server replacement")
+        deleted_channels += 1
+
+    for category in categories:
+        await category.delete(reason="Purple Team J2 full server replacement")
+        deleted_categories += 1
+
+    me = guild.me
+    if me is None:
+        raise RuntimeError("Purple Team member object became unavailable during replacement.")
+
+    # Work top-down so hierarchy changes do not leave a higher role behind.
+    for role in sorted(guild.roles, key=lambda r: r.position, reverse=True):
+        if role == guild.default_role or role.managed:
+            continue
+        if role >= me.top_role:
+            raise RuntimeError(
+                f"Role {role.name!r} moved above Purple Team during replacement and could not be deleted."
+            )
+        await role.delete(reason="Purple Team J2 full server replacement")
+        deleted_roles += 1
+
+    return {
+        "channels_deleted": deleted_channels,
+        "categories_deleted": deleted_categories,
+        "roles_deleted": deleted_roles,
+    }
 
 
 async def _ensure_roles(guild: discord.Guild, definitions: list[dict[str, Any]]) -> dict[str, discord.Role]:
@@ -178,8 +259,18 @@ async def _ensure_channel(
     return channel, True
 
 
-async def install_private_template(guild: discord.Guild) -> dict[str, int]:
+async def install_private_template(guild: discord.Guild, *, replace: bool = False) -> dict[str, int]:
     data = _load_template()
+    _preflight_replace(guild, data)
+
+    wipe_stats = {
+        "channels_deleted": 0,
+        "categories_deleted": 0,
+        "roles_deleted": 0,
+    }
+    if replace:
+        wipe_stats = await _wipe_existing_layout(guild)
+
     role_map = await _ensure_roles(guild, data["roles"])
     created_categories = 0
     created_channels = 0
@@ -213,7 +304,15 @@ async def install_private_template(guild: discord.Guild) -> dict[str, int]:
         "roles": len(data["roles"]),
         "categories_created": created_categories,
         "channels_created": created_channels,
+        **wipe_stats,
     }
+
+
+async def _dm_result(user: discord.abc.User, title: str, description: str, *, kind: str) -> None:
+    try:
+        await user.send(embed=make_embed(title, description, kind=kind))
+    except discord.HTTPException:
+        pass
 
 
 def register_owner_template_commands(bot: discord.Client) -> None:
@@ -223,9 +322,9 @@ def register_owner_template_commands(bot: discord.Client) -> None:
         default_permissions=discord.Permissions(administrator=True),
     )
 
-    @owner.command(name="template-install", description="Install or repair the private J2 Discord server template")
+    @owner.command(name="template-install", description="Replace this server with the private J2 template")
     @app_commands.guild_only()
-    async def template_install(interaction: discord.Interaction, confirm: bool = False):
+    async def template_install(interaction: discord.Interaction, confirm: str = ""):
         if not settings.bot_owner_id or interaction.user.id != settings.bot_owner_id:
             await interaction.response.send_message(
                 embed=make_embed("Access Denied", "This command is restricted to the configured Purple Team bot owner.", kind="error"),
@@ -244,34 +343,55 @@ def register_owner_template_commands(bot: discord.Client) -> None:
                 ephemeral=True,
             )
             return
-        if not confirm:
+
+        if confirm.strip().upper() != REPLACE_CONFIRMATION:
             await interaction.response.send_message(
                 embed=make_embed(
-                    "Private J2 Template",
-                    "This synchronizes the Linux-style roles, matching categories/channels, private staff area, ordering, and permission overwrites.\n\nRun `/owner template-install confirm:true` to continue.",
+                    "Full Server Replacement",
+                    "This command will permanently delete all deletable existing channels, categories, messages, and normal roles, then rebuild the server from the private J2 blueprint. Discord-managed/bot/integration roles and `@everyone` cannot be deleted.\n\nRun `/owner template-install confirm:REPLACE` to proceed.",
                     kind="warning",
                 ),
                 ephemeral=True,
             )
             return
 
-        await interaction.response.defer(ephemeral=True, thinking=True)
+        data = _load_template()
         try:
-            result = await install_private_template(interaction.guild)
-            panel = make_embed(
-                "J2 Template Synchronized",
-                "Purple Team finished applying the private server blueprint.",
-                kind="success",
-            )
-            panel.add_field(name="Roles", value=str(result["roles"]), inline=True)
-            panel.add_field(name="New Categories", value=str(result["categories_created"]), inline=True)
-            panel.add_field(name="New Channels", value=str(result["channels_created"]), inline=True)
-            panel.add_field(name="Safety", value="Existing matching roles/channels were synchronized instead of duplicated.", inline=False)
-            await interaction.followup.send(embed=panel, ephemeral=True)
+            _preflight_replace(interaction.guild, data)
         except Exception as exc:
-            await interaction.followup.send(
-                embed=make_embed("Template Install Failed", f"```text\n{str(exc)[:1500]}\n```", kind="error"),
+            await interaction.response.send_message(
+                embed=make_embed("Replacement Blocked", f"```text\n{str(exc)[:1500]}\n```", kind="error"),
                 ephemeral=True,
+            )
+            return
+
+        # Respond before the wipe because the channel containing this interaction
+        # is intentionally going to be deleted. Completion/failure is sent by DM.
+        await interaction.response.send_message(
+            embed=make_embed(
+                "J2 Replacement Started",
+                "Preflight passed. Purple Team is deleting the existing layout and rebuilding the server from the private J2 template. This channel may disappear. I will DM you when the operation finishes.",
+                kind="warning",
+            ),
+            ephemeral=True,
+        )
+
+        try:
+            result = await install_private_template(interaction.guild, replace=True)
+            description = (
+                "The J2 server replacement completed successfully.\n\n"
+                f"Deleted: **{result['channels_deleted']}** channels, **{result['categories_deleted']}** categories, "
+                f"**{result['roles_deleted']}** normal roles.\n"
+                f"Created/synchronized: **{result['roles']}** template roles, **{result['categories_created']}** categories, "
+                f"**{result['channels_created']}** channels."
+            )
+            await _dm_result(interaction.user, "J2 Replacement Complete", description, kind="success")
+        except Exception as exc:
+            await _dm_result(
+                interaction.user,
+                "J2 Replacement Failed",
+                f"The replacement encountered an error after starting.\n\n```text\n{str(exc)[:1500]}\n```",
+                kind="error",
             )
 
     bot.tree.add_command(owner)
