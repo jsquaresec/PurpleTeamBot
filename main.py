@@ -8,6 +8,7 @@ from bot.client import PurpleTeamBot
 from bot.csec_access import register_csec_access_commands
 from bot.cyberspace_community import install_cyberspace_community, register_cyberspace_community_commands
 from bot.daily_snapshot import install_daily_snapshot, register_snapshot_command
+from bot.event_stream_logging import install_event_stream_logging
 from bot.extra_commands import register_extra_commands
 from bot.free_person_commands import register_free_person_commands
 from bot.personpages_person_commands import register_personpages_person_commands
@@ -61,11 +62,6 @@ class FreeStackPurpleTeamBot(PurpleTeamBot):
 async def main() -> None:
     bot = FreeStackPurpleTeamBot()
 
-    # Welcome/leave events require guild + member events. The privileged Members
-    # intent must also be enabled for the application in Discord Developer Portal.
-    bot.intents.guilds = True
-    bot.intents.members = True
-
     install_channel_guard(bot)
     register_extra_commands(bot)
     register_provider_commands(bot)
@@ -76,6 +72,11 @@ async def main() -> None:
     register_almighty_purple_loader(bot)
     register_cyberspace_community_commands(bot)
     install_cyberspace_community(bot)
+
+    # Install after the community module so the event-stream logger can replace
+    # the legacy departure-to-welcome listener while keeping join welcomes.
+    install_event_stream_logging(bot)
+
     install_daily_snapshot(bot)
     await bot.start_bot()
 
