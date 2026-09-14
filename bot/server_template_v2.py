@@ -1,18 +1,10 @@
 import re
+from typing import Any
 
 import discord
 from discord import app_commands
 
-from bot.server_template import (
-    REPLACE_CONFIRMATION,
-    _build_overwrites,
-    _dm_result,
-    _ensure_category,
-    _ensure_channel,
-    _ensure_roles,
-    _load_template,
-    _wipe_existing_layout,
-)
+from bot.server_template import REPLACE_CONFIRMATION, _colour, _dm_result, _load_template, _permissions, _overwrite_from_spec
 from bot.ui import make_embed
 from core.config import settings
 
@@ -24,20 +16,25 @@ def _normalize_role_name(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
 
 
+async def _fresh_roles(guild: discord.Guild) -> list[discord.Role]:
+    return await guild.fetch_roles()
+
+
+def _everyone_role(guild: discord.Guild, roles: list[discord.Role]) -> discord.Role:
+    role = next((item for item in roles if item.id == guild.id), None)
+    if role is None:
+        raise RuntimeError("Discord did not return the @everyone role for this server.")
+    return role
+
+
 async def _resolve_bot_top_role(
     guild: discord.Guild,
     bot_user_id: int,
     bot_display_name: str = "",
 ) -> discord.Role:
-    """Resolve Purple Team's highest controlling role from fresh Discord role data.
+    roles = await _fresh_roles(guild)
 
-    This intentionally avoids member-cache dependence because Purple Team currently
-    runs with Intents.none().
-    """
-    roles = await guild.fetch_roles()
-
-    # Best case: Discord marks the managed integration role with this bot's ID.
-    tagged = []
+    tagged: list[discord.Role] = []
     for role in roles:
         if not role.managed:
             continue
@@ -47,14 +44,10 @@ async def _resolve_bot_top_role(
     if tagged:
         return max(tagged, key=lambda role: role.position)
 
-    # This deployment uses a manually positioned Administrator role named
-    # "[ Demon Scope ]". Resolve it directly from fresh guild role data.
-    exact = discord.utils.get(roles, name=ROLE_NAME_FALLBACK)
+    exact = next((role for role in roles if role.name == ROLE_NAME_FALLBACK), None)
     if exact is not None:
         return exact
 
-    # Tolerate cosmetic brackets/spacing and a future rename matching the bot's
-    # display name, while still requiring an Administrator-capable role.
     wanted_names = {_normalize_role_name(ROLE_NAME_FALLBACK)}
     if bot_display_name:
         wanted_names.add(_normalize_role_name(bot_display_name))
@@ -62,7 +55,7 @@ async def _resolve_bot_top_role(
     candidates = [
         role
         for role in roles
-        if role != guild.default_role
+        if role.id != guild.id
         and _normalize_role_name(role.name) in wanted_names
         and role.permissions.administrator
     ]
@@ -82,11 +75,7 @@ async def _preflight_replace(
     bot_display_name: str,
     effective_permissions: discord.Permissions,
 ) -> discord.Role:
-    top_role = await _resolve_bot_top_role(
-        guild,
-        bot_user_id,
-        bot_display_name,
-    )
+    top_role = await _resolve_bot_top_role(guild, bot_user_id, bot_display_name)
 
     if not (
         effective_permissions.administrator
@@ -97,11 +86,11 @@ async def _preflight_replace(
             "before it can replace the server layout."
         )
 
-    fresh_roles = await guild.fetch_roles()
+    fresh_roles = await _fresh_roles(guild)
     blocked_roles = [
         role.name
         for role in fresh_roles
-        if role != guild.default_role
+        if role.id != guild.id
         and not role.managed
         and role.id != top_role.id
         and role.position >= top_role.position
@@ -116,6 +105,160 @@ async def _preflight_replace(
         )
 
     return top_role
+
+
+async def _wipe_existing_layout(guild: discord.Guild, bot_role: discord.Role) -> dict[str, int]:
+    deleted_channels = 0
+    deleted_categories = 0
+    deleted_roles = 0
+
+    ordinary_channels = [channel for channel in guild.channels if not isinstance(channel, discord.CategoryChannel)]
+    categories = list(guild.categories)
+
+    for channel in ordinary_channels:
+        await channel.delete(reason="Purple Team J2 full server replacement")
+        deleted_channels += 1
+
+    for category in categories:
+        await category.delete(reason="Purple Team J2 full server replacement")
+        deleted_categories += 1
+
+    fresh_roles = await _fresh_roles(guild)
+    current_bot_role = next((role for role in fresh_roles if role.id == bot_role.id), None)
+    if current_bot_role is None:
+        current_bot_role = await _resolve_bot_top_role(guild, 0, ROLE_NAME_FALLBACK)
+
+    for role in sorted(fresh_roles, key=lambda item: item.position, reverse=True):
+        if role.id == guild.id or role.managed or role.id == current_bot_role.id:
+            continue
+        if role.position >= current_bot_role.position:
+            raise RuntimeError(f"Role {role.name!r} is at or above Purple Team and could not be deleted.")
+        await role.delete(reason="Purple Team J2 full server replacement")
+        deleted_roles += 1
+
+    return {
+        "channels_deleted": deleted_channels,
+        "categories_deleted": deleted_categories,
+        "roles_deleted": deleted_roles,
+    }
+
+
+async def _ensure_roles(
+    guild: discord.Guild,
+    definitions: list[dict[str, Any]],
+    bot_role: discord.Role,
+) -> dict[str, discord.Role]:
+    fresh_roles = await _fresh_roles(guild)
+    role_map: dict[str, discord.Role] = {role.name: role for role in fresh_roles}
+
+    for item in reversed(definitions):
+        name = item["name"]
+        role = role_map.get(name)
+        perms = _permissions(item.get("permissions", []))
+        colour = _colour(item.get("colour"))
+        if role is None:
+            role = await guild.create_role(
+                name=name,
+                permissions=perms,
+                colour=colour,
+                hoist=bool(item.get("hoist", False)),
+                mentionable=bool(item.get("mentionable", False)),
+                reason="Purple Team private J2 template install",
+            )
+            role_map[name] = role
+        elif not role.managed:
+            await role.edit(
+                permissions=perms,
+                colour=colour,
+                hoist=bool(item.get("hoist", False)),
+                mentionable=bool(item.get("mentionable", False)),
+                reason="Purple Team private J2 template sync",
+            )
+
+    fresh_roles = await _fresh_roles(guild)
+    current_bot_role = next((role for role in fresh_roles if role.id == bot_role.id), None)
+    if current_bot_role is None:
+        raise RuntimeError("Purple Team's control role disappeared while creating the J2 hierarchy.")
+
+    ceiling = current_bot_role.position - 1
+    for index in range(len(definitions) - 1, -1, -1):
+        role = role_map[definitions[index]["name"]]
+        target_position = ceiling - index
+        if target_position < 1:
+            target_position = 1
+        if role.position != target_position:
+            await role.edit(position=target_position, reason="Purple Team J2 role hierarchy")
+
+    return role_map
+
+
+def _build_overwrites(
+    guild: discord.Guild,
+    roles: list[discord.Role],
+    role_map: dict[str, discord.Role],
+    spec: dict[str, Any] | None,
+    *,
+    base: dict[discord.abc.Snowflake, discord.PermissionOverwrite] | None = None,
+) -> dict[discord.abc.Snowflake, discord.PermissionOverwrite]:
+    result = dict(base or {})
+    everyone = _everyone_role(guild, roles)
+
+    for target, overwrite_spec in (spec or {}).items():
+        if target == "@everyone":
+            result[everyone] = _overwrite_from_spec(overwrite_spec)
+            continue
+        role = role_map.get(target)
+        if role is None:
+            raise RuntimeError(f"Template references missing role {target!r} in permission overwrites.")
+        result[role] = _overwrite_from_spec(overwrite_spec)
+    return result
+
+
+async def _ensure_category(
+    guild: discord.Guild,
+    name: str,
+    overwrites: dict[discord.abc.Snowflake, discord.PermissionOverwrite],
+) -> discord.CategoryChannel:
+    existing = next((category for category in guild.categories if category.name == name), None)
+    if existing is not None:
+        await existing.edit(overwrites=overwrites, reason="Purple Team private J2 template sync")
+        return existing
+    return await guild.create_category(
+        name=name,
+        overwrites=overwrites,
+        reason="Purple Team private J2 template install",
+    )
+
+
+async def _ensure_channel(
+    guild: discord.Guild,
+    category: discord.CategoryChannel,
+    item: dict[str, Any],
+    overwrites: dict[discord.abc.Snowflake, discord.PermissionOverwrite],
+) -> discord.abc.GuildChannel:
+    name = item["name"]
+    kind = item.get("type", "text")
+    topic = item.get("topic")
+    existing = next((channel for channel in category.channels if channel.name == name), None)
+
+    if existing is not None:
+        kwargs: dict[str, Any] = {"overwrites": overwrites, "reason": "Purple Team private J2 template sync"}
+        if isinstance(existing, (discord.TextChannel, discord.ForumChannel)) and topic is not None:
+            kwargs["topic"] = topic
+        await existing.edit(**kwargs)
+        return existing
+
+    common = {
+        "name": name,
+        "category": category,
+        "overwrites": overwrites,
+        "reason": "Purple Team private J2 template install",
+    }
+    if kind == "voice":
+        return await guild.create_voice_channel(**common)
+    if kind == "forum":
+        return await guild.create_forum(topic=topic, **common)
+    return await guild.create_text_channel(topic=topic, **common)
 
 
 async def install_private_template_v2(
@@ -133,54 +276,42 @@ async def install_private_template_v2(
         effective_permissions=effective_permissions,
     )
 
-    wipe_stats = await _wipe_existing_layout(guild, bot_role=bot_role)
-
-    # Role positions change as existing roles are deleted. Resolve the controlling
-    # role again from Discord before creating/reordering the J2 hierarchy.
-    bot_role = await _resolve_bot_top_role(
-        guild,
-        bot_user_id,
-        bot_display_name,
-    )
-    role_map = await _ensure_roles(guild, data["roles"], bot_role=bot_role)
+    wipe_stats = await _wipe_existing_layout(guild, bot_role)
+    bot_role = await _resolve_bot_top_role(guild, bot_user_id, bot_display_name)
+    role_map = await _ensure_roles(guild, data["roles"], bot_role)
 
     created_categories = 0
     created_channels = 0
 
     for category_index, category_spec in enumerate(data["categories"]):
+        roles = await _fresh_roles(guild)
         category_overwrites = _build_overwrites(
             guild,
+            roles,
             role_map,
             category_spec.get("overwrites"),
         )
-        category, was_created = await _ensure_category(
-            guild,
-            category_spec["name"],
-            category_overwrites,
-        )
-        created_categories += int(was_created)
+        category = await _ensure_category(guild, category_spec["name"], category_overwrites)
+        created_categories += 1
         await category.edit(position=category_index, reason="Purple Team J2 category order")
 
         for channel_index, channel_spec in enumerate(category_spec.get("channels", [])):
+            roles = await _fresh_roles(guild)
             channel_overwrites = _build_overwrites(
                 guild,
+                roles,
                 role_map,
                 channel_spec.get("overwrites"),
                 base=category_overwrites,
             )
-            channel, was_created = await _ensure_channel(
-                guild,
-                category,
-                channel_spec,
-                channel_overwrites,
-            )
-            created_channels += int(was_created)
+            channel = await _ensure_channel(guild, category, channel_spec, channel_overwrites)
+            created_channels += 1
             await channel.edit(position=channel_index, reason="Purple Team J2 channel order")
 
     root_role = role_map.get(data.get("root_role", "root"))
     if root_role is not None:
         try:
-            owner_member = guild.get_member(guild.owner_id) or await guild.fetch_member(guild.owner_id)
+            owner_member = await guild.fetch_member(guild.owner_id)
             await owner_member.add_roles(root_role, reason="Purple Team J2 owner/root mapping")
         except discord.HTTPException:
             pass
@@ -205,33 +336,22 @@ def register_owner_template_commands_v2(bot: discord.Client) -> None:
     async def template_install(interaction: discord.Interaction, confirm: str = ""):
         if not settings.bot_owner_id or interaction.user.id != settings.bot_owner_id:
             await interaction.response.send_message(
-                embed=make_embed(
-                    "Access Denied",
-                    "This command is restricted to the configured Purple Team bot owner.",
-                    kind="error",
-                ),
+                embed=make_embed("Access Denied", "This command is restricted to the configured Purple Team bot owner.", kind="error"),
                 ephemeral=True,
             )
             return
-
         if interaction.guild is None:
             await interaction.response.send_message(
                 embed=make_embed("Server Only", "Run this command inside the configured Discord server.", kind="error"),
                 ephemeral=True,
             )
             return
-
         if settings.discord_guild_id and interaction.guild.id != settings.discord_guild_id:
             await interaction.response.send_message(
-                embed=make_embed(
-                    "Unauthorized Server",
-                    "The private J2 template can only be installed in the configured Purple Team guild.",
-                    kind="error",
-                ),
+                embed=make_embed("Unauthorized Server", "The private J2 template can only be installed in the configured Purple Team guild.", kind="error"),
                 ephemeral=True,
             )
             return
-
         if confirm.strip().upper() != REPLACE_CONFIRMATION:
             await interaction.response.send_message(
                 embed=make_embed(
@@ -242,20 +362,14 @@ def register_owner_template_commands_v2(bot: discord.Client) -> None:
                 ephemeral=True,
             )
             return
-
         if interaction.client.user is None:
             await interaction.response.send_message(
-                embed=make_embed(
-                    "Replacement Blocked",
-                    "Purple Team has not finished identifying its Discord user yet. Try again in a few seconds.",
-                    kind="error",
-                ),
+                embed=make_embed("Replacement Blocked", "Purple Team has not finished identifying its Discord user yet. Try again in a few seconds.", kind="error"),
                 ephemeral=True,
             )
             return
 
         bot_display_name = interaction.client.user.display_name
-
         try:
             await _preflight_replace(
                 interaction.guild,
@@ -265,11 +379,7 @@ def register_owner_template_commands_v2(bot: discord.Client) -> None:
             )
         except Exception as exc:
             await interaction.response.send_message(
-                embed=make_embed(
-                    "Replacement Blocked",
-                    f"```text\n{str(exc)[:1500]}\n```",
-                    kind="error",
-                ),
+                embed=make_embed("Replacement Blocked", f"```text\n{str(exc)[:1500]}\n```", kind="error"),
                 ephemeral=True,
             )
             return
