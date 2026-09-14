@@ -10,6 +10,7 @@ from bot.free_person_commands import register_free_person_commands
 from bot.personpages_person_commands import register_personpages_person_commands
 from bot.provider_commands import register_provider_commands
 from bot.security_commands import register_security_commands
+from bot.server_template import register_owner_template_commands
 from bot.threaded_intel_commands import register_threaded_intel_commands
 from bot.threaded_lookup_commands import register_threaded_lookup_commands
 from bot.threaded_remaining_commands import register_threaded_remaining_commands
@@ -51,6 +52,7 @@ async def main() -> None:
     register_provider_commands(bot)
     register_security_commands(bot)
     register_snapshot_command(bot)
+    register_owner_template_commands(bot)
     install_daily_snapshot(bot)
     await bot.start_bot()
 
