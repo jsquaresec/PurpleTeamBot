@@ -20,6 +20,10 @@ async def _fresh_roles(guild: discord.Guild) -> list[discord.Role]:
     return await guild.fetch_roles()
 
 
+async def _fresh_channels(guild: discord.Guild) -> list[discord.abc.GuildChannel]:
+    return await guild.fetch_channels()
+
+
 def _everyone_role(guild: discord.Guild, roles: list[discord.Role]) -> discord.Role:
     role = next((item for item in roles if item.id == guild.id), None)
     if role is None:
@@ -112,29 +116,77 @@ async def _wipe_existing_layout(guild: discord.Guild, bot_role: discord.Role) ->
     deleted_categories = 0
     deleted_roles = 0
 
-    ordinary_channels = [channel for channel in guild.channels if not isinstance(channel, discord.CategoryChannel)]
-    categories = list(guild.categories)
+    try:
+        fresh_channels = await _fresh_channels(guild)
+    except Exception as exc:
+        raise RuntimeError(f"wipe-channels: could not fetch current channels: {exc}") from exc
+
+    ordinary_channels = [
+        channel for channel in fresh_channels
+        if not isinstance(channel, discord.CategoryChannel)
+    ]
+    categories = [
+        channel for channel in fresh_channels
+        if isinstance(channel, discord.CategoryChannel)
+    ]
 
     for channel in ordinary_channels:
-        await channel.delete(reason="Purple Team J2 full server replacement")
-        deleted_channels += 1
+        try:
+            await channel.delete(reason="Purple Team J2 full server replacement")
+            deleted_channels += 1
+        except discord.NotFound:
+            continue
+        except Exception as exc:
+            raise RuntimeError(
+                f"wipe-channels: failed deleting {channel.name!r} ({channel.id}): {exc}"
+            ) from exc
 
+    # Re-fetch before categories so we do not act on stale objects after deleting children.
+    try:
+        fresh_channels = await _fresh_channels(guild)
+    except Exception as exc:
+        raise RuntimeError(f"wipe-categories: could not refresh channels: {exc}") from exc
+
+    categories = [
+        channel for channel in fresh_channels
+        if isinstance(channel, discord.CategoryChannel)
+    ]
     for category in categories:
-        await category.delete(reason="Purple Team J2 full server replacement")
-        deleted_categories += 1
+        try:
+            await category.delete(reason="Purple Team J2 full server replacement")
+            deleted_categories += 1
+        except discord.NotFound:
+            continue
+        except Exception as exc:
+            raise RuntimeError(
+                f"wipe-categories: failed deleting {category.name!r} ({category.id}): {exc}"
+            ) from exc
 
-    fresh_roles = await _fresh_roles(guild)
+    try:
+        fresh_roles = await _fresh_roles(guild)
+    except Exception as exc:
+        raise RuntimeError(f"wipe-roles: could not fetch current roles: {exc}") from exc
+
     current_bot_role = next((role for role in fresh_roles if role.id == bot_role.id), None)
     if current_bot_role is None:
-        current_bot_role = await _resolve_bot_top_role(guild, 0, ROLE_NAME_FALLBACK)
+        raise RuntimeError("wipe-roles: Purple Team control role disappeared before role cleanup.")
 
     for role in sorted(fresh_roles, key=lambda item: item.position, reverse=True):
         if role.id == guild.id or role.managed or role.id == current_bot_role.id:
             continue
         if role.position >= current_bot_role.position:
-            raise RuntimeError(f"Role {role.name!r} is at or above Purple Team and could not be deleted.")
-        await role.delete(reason="Purple Team J2 full server replacement")
-        deleted_roles += 1
+            raise RuntimeError(
+                f"wipe-roles: role {role.name!r} is at or above Purple Team and cannot be deleted."
+            )
+        try:
+            await role.delete(reason="Purple Team J2 full server replacement")
+            deleted_roles += 1
+        except discord.NotFound:
+            continue
+        except Exception as exc:
+            raise RuntimeError(
+                f"wipe-roles: failed deleting {role.name!r} ({role.id}): {exc}"
+            ) from exc
 
     return {
         "channels_deleted": deleted_channels,
@@ -148,7 +200,11 @@ async def _ensure_roles(
     definitions: list[dict[str, Any]],
     bot_role: discord.Role,
 ) -> dict[str, discord.Role]:
-    fresh_roles = await _fresh_roles(guild)
+    try:
+        fresh_roles = await _fresh_roles(guild)
+    except Exception as exc:
+        raise RuntimeError(f"create-roles: could not fetch roles: {exc}") from exc
+
     role_map: dict[str, discord.Role] = {role.name: role for role in fresh_roles}
 
     for item in reversed(definitions):
@@ -156,40 +212,50 @@ async def _ensure_roles(
         role = role_map.get(name)
         perms = _permissions(item.get("permissions", []))
         colour = _colour(item.get("colour"))
-        if role is None:
-            role = await guild.create_role(
-                name=name,
-                permissions=perms,
-                colour=colour,
-                hoist=bool(item.get("hoist", False)),
-                mentionable=bool(item.get("mentionable", False)),
-                reason="Purple Team private J2 template install",
-            )
-            role_map[name] = role
-        elif not role.managed:
-            await role.edit(
-                permissions=perms,
-                colour=colour,
-                hoist=bool(item.get("hoist", False)),
-                mentionable=bool(item.get("mentionable", False)),
-                reason="Purple Team private J2 template sync",
-            )
+        try:
+            if role is None:
+                role = await guild.create_role(
+                    name=name,
+                    permissions=perms,
+                    colour=colour,
+                    hoist=bool(item.get("hoist", False)),
+                    mentionable=bool(item.get("mentionable", False)),
+                    reason="Purple Team private J2 template install",
+                )
+                role_map[name] = role
+            elif not role.managed:
+                await role.edit(
+                    permissions=perms,
+                    colour=colour,
+                    hoist=bool(item.get("hoist", False)),
+                    mentionable=bool(item.get("mentionable", False)),
+                    reason="Purple Team private J2 template sync",
+                )
+        except Exception as exc:
+            raise RuntimeError(f"create-roles: failed on role {name!r}: {exc}") from exc
 
     fresh_roles = await _fresh_roles(guild)
     current_bot_role = next((role for role in fresh_roles if role.id == bot_role.id), None)
     if current_bot_role is None:
-        raise RuntimeError("Purple Team's control role disappeared while creating the J2 hierarchy.")
+        raise RuntimeError("create-roles: Purple Team's control role disappeared while building the hierarchy.")
 
+    # Refresh newly created role objects before reordering them.
+    role_map = {role.name: role for role in fresh_roles}
     ceiling = current_bot_role.position - 1
     for index in range(len(definitions) - 1, -1, -1):
-        role = role_map[definitions[index]["name"]]
-        target_position = ceiling - index
-        if target_position < 1:
-            target_position = 1
+        name = definitions[index]["name"]
+        role = role_map.get(name)
+        if role is None:
+            raise RuntimeError(f"create-roles: newly created role {name!r} could not be re-fetched.")
+        target_position = max(1, ceiling - index)
         if role.position != target_position:
-            await role.edit(position=target_position, reason="Purple Team J2 role hierarchy")
+            try:
+                await role.edit(position=target_position, reason="Purple Team J2 role hierarchy")
+            except Exception as exc:
+                raise RuntimeError(f"create-roles: failed positioning {name!r}: {exc}") from exc
 
-    return role_map
+    # Return one last fresh map because role edits can change object positions.
+    return {role.name: role for role in await _fresh_roles(guild)}
 
 
 def _build_overwrites(
@@ -214,20 +280,35 @@ def _build_overwrites(
     return result
 
 
+async def _find_category(guild: discord.Guild, name: str) -> discord.CategoryChannel | None:
+    channels = await _fresh_channels(guild)
+    return next(
+        (
+            channel for channel in channels
+            if isinstance(channel, discord.CategoryChannel) and channel.name == name
+        ),
+        None,
+    )
+
+
 async def _ensure_category(
     guild: discord.Guild,
     name: str,
     overwrites: dict[discord.abc.Snowflake, discord.PermissionOverwrite],
-) -> discord.CategoryChannel:
-    existing = next((category for category in guild.categories if category.name == name), None)
-    if existing is not None:
-        await existing.edit(overwrites=overwrites, reason="Purple Team private J2 template sync")
-        return existing
-    return await guild.create_category(
-        name=name,
-        overwrites=overwrites,
-        reason="Purple Team private J2 template install",
-    )
+) -> tuple[discord.CategoryChannel, bool]:
+    existing = await _find_category(guild, name)
+    try:
+        if existing is not None:
+            await existing.edit(overwrites=overwrites, reason="Purple Team private J2 template sync")
+            return existing, False
+        category = await guild.create_category(
+            name=name,
+            overwrites=overwrites,
+            reason="Purple Team private J2 template install",
+        )
+        return category, True
+    except Exception as exc:
+        raise RuntimeError(f"create-categories: failed on category {name!r}: {exc}") from exc
 
 
 async def _ensure_channel(
@@ -235,30 +316,46 @@ async def _ensure_channel(
     category: discord.CategoryChannel,
     item: dict[str, Any],
     overwrites: dict[discord.abc.Snowflake, discord.PermissionOverwrite],
-) -> discord.abc.GuildChannel:
+) -> tuple[discord.abc.GuildChannel, bool]:
     name = item["name"]
     kind = item.get("type", "text")
     topic = item.get("topic")
-    existing = next((channel for channel in category.channels if channel.name == name), None)
 
-    if existing is not None:
-        kwargs: dict[str, Any] = {"overwrites": overwrites, "reason": "Purple Team private J2 template sync"}
-        if isinstance(existing, (discord.TextChannel, discord.ForumChannel)) and topic is not None:
-            kwargs["topic"] = topic
-        await existing.edit(**kwargs)
-        return existing
+    fresh_channels = await _fresh_channels(guild)
+    existing = next(
+        (
+            channel for channel in fresh_channels
+            if channel.name == name and getattr(channel, "category_id", None) == category.id
+        ),
+        None,
+    )
 
-    common = {
-        "name": name,
-        "category": category,
-        "overwrites": overwrites,
-        "reason": "Purple Team private J2 template install",
-    }
-    if kind == "voice":
-        return await guild.create_voice_channel(**common)
-    if kind == "forum":
-        return await guild.create_forum(topic=topic, **common)
-    return await guild.create_text_channel(topic=topic, **common)
+    try:
+        if existing is not None:
+            kwargs: dict[str, Any] = {
+                "overwrites": overwrites,
+                "reason": "Purple Team private J2 template sync",
+            }
+            if isinstance(existing, (discord.TextChannel, discord.ForumChannel)) and topic is not None:
+                kwargs["topic"] = topic
+            await existing.edit(**kwargs)
+            return existing, False
+
+        common = {
+            "name": name,
+            "category": category,
+            "overwrites": overwrites,
+            "reason": "Purple Team private J2 template install",
+        }
+        if kind == "voice":
+            channel = await guild.create_voice_channel(**common)
+        elif kind == "forum":
+            channel = await guild.create_forum(topic=topic, **common)
+        else:
+            channel = await guild.create_text_channel(topic=topic, **common)
+        return channel, True
+    except Exception as exc:
+        raise RuntimeError(f"create-channels: failed on channel {name!r}: {exc}") from exc
 
 
 async def install_private_template_v2(
@@ -291,12 +388,22 @@ async def install_private_template_v2(
             role_map,
             category_spec.get("overwrites"),
         )
-        category = await _ensure_category(guild, category_spec["name"], category_overwrites)
-        created_categories += 1
-        await category.edit(position=category_index, reason="Purple Team J2 category order")
+        category, was_created = await _ensure_category(
+            guild,
+            category_spec["name"],
+            category_overwrites,
+        )
+        created_categories += int(was_created)
+        try:
+            await category.edit(position=category_index, reason="Purple Team J2 category order")
+        except Exception as exc:
+            raise RuntimeError(
+                f"create-categories: failed positioning {category_spec['name']!r}: {exc}"
+            ) from exc
 
         for channel_index, channel_spec in enumerate(category_spec.get("channels", [])):
             roles = await _fresh_roles(guild)
+            role_map = {role.name: role for role in roles}
             channel_overwrites = _build_overwrites(
                 guild,
                 roles,
@@ -304,10 +411,22 @@ async def install_private_template_v2(
                 channel_spec.get("overwrites"),
                 base=category_overwrites,
             )
-            channel = await _ensure_channel(guild, category, channel_spec, channel_overwrites)
-            created_channels += 1
-            await channel.edit(position=channel_index, reason="Purple Team J2 channel order")
+            channel, was_created = await _ensure_channel(
+                guild,
+                category,
+                channel_spec,
+                channel_overwrites,
+            )
+            created_channels += int(was_created)
+            try:
+                await channel.edit(position=channel_index, reason="Purple Team J2 channel order")
+            except Exception as exc:
+                raise RuntimeError(
+                    f"create-channels: failed positioning {channel_spec['name']!r}: {exc}"
+                ) from exc
 
+    roles = await _fresh_roles(guild)
+    role_map = {role.name: role for role in roles}
     root_role = role_map.get(data.get("root_role", "root"))
     if root_role is not None:
         try:
@@ -387,7 +506,7 @@ def register_owner_template_commands_v2(bot: discord.Client) -> None:
         await interaction.response.send_message(
             embed=make_embed(
                 "J2 Replacement Started",
-                "Preflight passed. Purple Team is deleting the existing layout and rebuilding the server from the private J2 template. This channel may disappear. I will DM you when the operation finishes.",
+                "Preflight passed. Purple Team is deleting the existing layout and rebuilding the server from fresh Discord data. This channel may disappear. I will DM you when the operation finishes.",
                 kind="warning",
             ),
             ephemeral=True,
@@ -412,7 +531,7 @@ def register_owner_template_commands_v2(bot: discord.Client) -> None:
             await _dm_result(
                 interaction.user,
                 "J2 Replacement Failed",
-                f"The replacement encountered an error after starting.\n\n```text\n{str(exc)[:1500]}\n```",
+                f"The replacement encountered an error after starting.\n\n```text\n{str(exc)[:1800]}\n```",
                 kind="error",
             )
 
