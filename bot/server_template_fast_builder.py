@@ -1,11 +1,23 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import discord
 
 import bot.server_template_v2 as template_v2
 from bot.server_template import _load_template, _overwrite_from_spec
+
+
+_INSTALL_LOCKS: dict[int, asyncio.Lock] = {}
+
+
+def _install_lock(guild_id: int) -> asyncio.Lock:
+    lock = _INSTALL_LOCKS.get(guild_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _INSTALL_LOCKS[guild_id] = lock
+    return lock
 
 
 def _everyone_role(guild: discord.Guild, roles: list[discord.Role]) -> discord.Role:
@@ -38,19 +50,68 @@ def _build_overwrites(
     return result
 
 
-async def install_private_template_fast(
+async def _create_category(
+    guild: discord.Guild,
+    *,
+    name: str,
+    overwrites: dict[discord.abc.Snowflake, discord.PermissionOverwrite],
+) -> discord.CategoryChannel:
+    try:
+        return await guild.create_category(
+            name=name,
+            overwrites=overwrites,
+            reason="Purple Team private J2 template install",
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"create-categories: failed creating {name!r}: {exc}"
+        ) from exc
+
+
+async def _category_still_exists(
+    guild: discord.Guild,
+    category_id: int,
+) -> bool:
+    channels = await guild.fetch_channels()
+    return any(
+        isinstance(channel, discord.CategoryChannel) and channel.id == category_id
+        for channel in channels
+    )
+
+
+async def _create_channel_once(
+    guild: discord.Guild,
+    *,
+    category: discord.CategoryChannel,
+    channel_spec: dict[str, Any],
+    overwrites: dict[discord.abc.Snowflake, discord.PermissionOverwrite],
+) -> None:
+    channel_name = channel_spec["name"]
+    channel_type = channel_spec.get("type", "text")
+    topic = channel_spec.get("topic")
+
+    common = {
+        "name": channel_name,
+        "category": category,
+        "overwrites": overwrites,
+        "reason": "Purple Team private J2 template install",
+    }
+
+    if channel_type == "voice":
+        await guild.create_voice_channel(**common)
+    elif channel_type == "forum":
+        await guild.create_forum(topic=topic, **common)
+    else:
+        await guild.create_text_channel(topic=topic, **common)
+
+
+async def _install_private_template_fast_locked(
     guild: discord.Guild,
     *,
     bot_user_id: int,
     bot_display_name: str,
     effective_permissions: discord.Permissions,
 ) -> dict[str, int]:
-    """Full J2 rebuild with minimal Discord API chatter.
-
-    The server is wiped first, so the creation phase never performs per-channel
-    discovery or position edits. Categories and channels are created sequentially
-    in the authoritative template order.
-    """
     data = _load_template()
 
     bot_role = await template_v2._preflight_replace(
@@ -68,9 +129,6 @@ async def install_private_template_fast(
         bot_display_name,
     )
 
-    # main.py replaces template_v2._ensure_roles with the hardened role-order
-    # implementation, so call the module attribute at runtime rather than
-    # importing a stale function reference here.
     role_map = await template_v2._ensure_roles(guild, data["roles"], bot_role)
 
     roles = await guild.fetch_roles()
@@ -88,22 +146,15 @@ async def install_private_template_fast(
             category_spec.get("overwrites"),
         )
 
-        try:
-            category = await guild.create_category(
-                name=category_name,
-                overwrites=category_overwrites,
-                reason="Purple Team private J2 template install",
-            )
-            created_categories += 1
-        except Exception as exc:
-            raise RuntimeError(
-                f"create-categories: failed creating {category_name!r}: {exc}"
-            ) from exc
+        category = await _create_category(
+            guild,
+            name=category_name,
+            overwrites=category_overwrites,
+        )
+        created_categories += 1
 
         for channel_spec in category_spec.get("channels", []):
             channel_name = channel_spec["name"]
-            channel_type = channel_spec.get("type", "text")
-            topic = channel_spec.get("topic")
             channel_overwrites = _build_overwrites(
                 guild,
                 roles,
@@ -112,21 +163,52 @@ async def install_private_template_fast(
                 base=category_overwrites,
             )
 
-            common = {
-                "name": channel_name,
-                "category": category,
-                "overwrites": channel_overwrites,
-                "reason": "Purple Team private J2 template install",
-            }
-
             try:
-                if channel_type == "voice":
-                    await guild.create_voice_channel(**common)
-                elif channel_type == "forum":
-                    await guild.create_forum(topic=topic, **common)
-                else:
-                    await guild.create_text_channel(topic=topic, **common)
+                await _create_channel_once(
+                    guild,
+                    category=category,
+                    channel_spec=channel_spec,
+                    overwrites=channel_overwrites,
+                )
                 created_channels += 1
+                continue
+            except discord.HTTPException as exc:
+                # Error 50035 with parent_id means Discord no longer knows the
+                # category ID. This can happen if an older overlapping installer
+                # invocation deletes the newly created category. Re-check once,
+                # recreate the category if needed, and retry the channel once.
+                text = str(exc)
+                vanished_parent = exc.code == 50035 and "parent_id" in text
+                if not vanished_parent:
+                    raise RuntimeError(
+                        f"create-channels: failed creating {channel_name!r} in {category_name!r}: {exc}"
+                    ) from exc
+
+                try:
+                    exists = await _category_still_exists(guild, category.id)
+                except Exception:
+                    exists = False
+
+                if not exists:
+                    category = await _create_category(
+                        guild,
+                        name=category_name,
+                        overwrites=category_overwrites,
+                    )
+                    created_categories += 1
+
+                try:
+                    await _create_channel_once(
+                        guild,
+                        category=category,
+                        channel_spec=channel_spec,
+                        overwrites=channel_overwrites,
+                    )
+                    created_channels += 1
+                except Exception as retry_exc:
+                    raise RuntimeError(
+                        f"create-channels: retry failed creating {channel_name!r} in {category_name!r}: {retry_exc}"
+                    ) from retry_exc
             except Exception as exc:
                 raise RuntimeError(
                     f"create-channels: failed creating {channel_name!r} in {category_name!r}: {exc}"
@@ -146,3 +228,28 @@ async def install_private_template_fast(
         "channels_created": created_channels,
         **wipe_stats,
     }
+
+
+async def install_private_template_fast(
+    guild: discord.Guild,
+    *,
+    bot_user_id: int,
+    bot_display_name: str,
+    effective_permissions: discord.Permissions,
+) -> dict[str, int]:
+    """Run exactly one destructive J2 replacement per guild at a time."""
+    lock = _install_lock(guild.id)
+
+    if lock.locked():
+        raise RuntimeError(
+            "replacement-lock: another CyberSpace replacement is already running for this server. "
+            "Wait for its completion DM before starting another one."
+        )
+
+    async with lock:
+        return await _install_private_template_fast_locked(
+            guild,
+            bot_user_id=bot_user_id,
+            bot_display_name=bot_display_name,
+            effective_permissions=effective_permissions,
+        )
