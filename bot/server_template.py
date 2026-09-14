@@ -74,12 +74,20 @@ def _build_overwrites(
     return result
 
 
-def _preflight_replace(guild: discord.Guild, template: dict[str, Any]) -> None:
+def _preflight_replace(
+    guild: discord.Guild,
+    template: dict[str, Any],
+    *,
+    effective_permissions: discord.Permissions | None = None,
+) -> None:
     me = guild.me
     if me is None:
         raise RuntimeError("Purple Team member object is unavailable in this guild.")
 
-    perms = me.guild_permissions
+    # For slash-command invocations, interaction.app_permissions is Discord's
+    # authoritative effective permission set for the application in that guild.
+    # Fall back to the cached member permissions for non-interaction callers.
+    perms = effective_permissions or me.guild_permissions
     if not (perms.administrator or (perms.manage_channels and perms.manage_roles)):
         raise RuntimeError(
             "Purple Team needs Administrator, or both Manage Channels and Manage Roles, "
@@ -119,8 +127,6 @@ async def _wipe_existing_layout(guild: discord.Guild) -> dict[str, int]:
     deleted_categories = 0
     deleted_roles = 0
 
-    # Delete ordinary channels first, then categories. Deleting a category does
-    # not automatically delete its children, so this ordering avoids orphans.
     ordinary_channels = [c for c in guild.channels if not isinstance(c, discord.CategoryChannel)]
     categories = list(guild.categories)
 
@@ -136,7 +142,6 @@ async def _wipe_existing_layout(guild: discord.Guild) -> dict[str, int]:
     if me is None:
         raise RuntimeError("Purple Team member object became unavailable during replacement.")
 
-    # Work top-down so hierarchy changes do not leave a higher role behind.
     for role in sorted(guild.roles, key=lambda r: r.position, reverse=True):
         if role == guild.default_role or role.managed:
             continue
@@ -259,9 +264,14 @@ async def _ensure_channel(
     return channel, True
 
 
-async def install_private_template(guild: discord.Guild, *, replace: bool = False) -> dict[str, int]:
+async def install_private_template(
+    guild: discord.Guild,
+    *,
+    replace: bool = False,
+    effective_permissions: discord.Permissions | None = None,
+) -> dict[str, int]:
     data = _load_template()
-    _preflight_replace(guild, data)
+    _preflight_replace(guild, data, effective_permissions=effective_permissions)
 
     wipe_stats = {
         "channels_deleted": 0,
@@ -357,7 +367,11 @@ def register_owner_template_commands(bot: discord.Client) -> None:
 
         data = _load_template()
         try:
-            _preflight_replace(interaction.guild, data)
+            _preflight_replace(
+                interaction.guild,
+                data,
+                effective_permissions=interaction.app_permissions,
+            )
         except Exception as exc:
             await interaction.response.send_message(
                 embed=make_embed("Replacement Blocked", f"```text\n{str(exc)[:1500]}\n```", kind="error"),
@@ -365,8 +379,6 @@ def register_owner_template_commands(bot: discord.Client) -> None:
             )
             return
 
-        # Respond before the wipe because the channel containing this interaction
-        # is intentionally going to be deleted. Completion/failure is sent by DM.
         await interaction.response.send_message(
             embed=make_embed(
                 "J2 Replacement Started",
@@ -377,7 +389,11 @@ def register_owner_template_commands(bot: discord.Client) -> None:
         )
 
         try:
-            result = await install_private_template(interaction.guild, replace=True)
+            result = await install_private_template(
+                interaction.guild,
+                replace=True,
+                effective_permissions=interaction.app_permissions,
+            )
             description = (
                 "The J2 server replacement completed successfully.\n\n"
                 f"Deleted: **{result['channels_deleted']}** channels, **{result['categories_deleted']}** categories, "
