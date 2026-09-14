@@ -11,6 +11,12 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 WELCOME_CHANNEL = "👋・welcome"
 SELF_ROLE_CHANNEL = "🪪・identity-roles"
 
+TEAM_ROLES = [
+    ("Red Team", "🔴", discord.ButtonStyle.danger),
+    ("Blue Team", "🔵", discord.ButtonStyle.primary),
+    ("Purple Team", "🟣", discord.ButtonStyle.secondary),
+]
+
 SELF_ROLES = [
     ("pentester", "⚡", discord.ButtonStyle.danger),
     ("bug-hunter", "🪲", discord.ButtonStyle.danger),
@@ -21,11 +27,19 @@ SELF_ROLES = [
     ("subscriber", "💗", discord.ButtonStyle.secondary),
 ]
 
-TEAM_ROLES = [
-    ("Red Team", "🔴", discord.ButtonStyle.danger),
-    ("Blue Team", "🔵", discord.ButtonStyle.primary),
-    ("Purple Team", "🟣", discord.ButtonStyle.secondary),
-]
+
+# Roles that must never become self-assignable through this module.
+PROTECTED_ROLES = {
+    "Almighty Purple",
+    "root",
+    "sudo",
+    "wheel",
+    "operator",
+    "sysadmin",
+    "daemon",
+    "/dev/null",
+    "hall-of-fame",
+}
 
 
 def _font(size: int, *, bold: bool = False) -> ImageFont.ImageFont:
@@ -94,8 +108,7 @@ def _render_banner(
         try:
             avatar = Image.open(BytesIO(avatar_bytes)).convert("RGB").resize((avatar_size, avatar_size))
             mask = Image.new("L", (avatar_size, avatar_size), 0)
-            mask_draw = ImageDraw.Draw(mask)
-            mask_draw.ellipse((0, 0, avatar_size, avatar_size), fill=255)
+            ImageDraw.Draw(mask).ellipse((0, 0, avatar_size, avatar_size), fill=255)
             image.paste(avatar, avatar_xy, mask)
         except Exception:
             draw.ellipse((avatar_xy[0], avatar_xy[1], avatar_xy[0] + avatar_size, avatar_xy[1] + avatar_size), fill=(30, 35, 52))
@@ -108,16 +121,14 @@ def _render_banner(
 
     text_x = 315
     draw.text((text_x, 112), status, font=_font(23, bold=True), fill=status_colour)
-    headline_font = _fit_text(draw, headline, 720, 46, bold=True)
-    draw.text((text_x, 150), headline, font=headline_font, fill=(242, 245, 255))
+    draw.text((text_x, 150), headline, font=_fit_text(draw, headline, 720, 46, bold=True), fill=(242, 245, 255))
+    draw.text((text_x, 213), display_name, font=_fit_text(draw, display_name, 700, 40, bold=True), fill=purple)
 
-    name_font = _fit_text(draw, display_name, 700, 40, bold=True)
-    draw.text((text_x, 213), display_name, font=name_font, fill=purple)
-
-    if joined:
-        footer = f"NODE #{member_count:04d}  //  choose your team  //  access granted"
-    else:
-        footer = f"{member_count:04d} active nodes remain  //  session closed"
+    footer = (
+        f"NODE #{member_count:04d}  //  choose your team  //  access granted"
+        if joined
+        else f"{member_count:04d} active nodes remain  //  session closed"
+    )
     draw.text((text_x, 274), footer, font=_font(21), fill=(160, 170, 194))
 
     glow = Image.new("RGBA", image.size, (0, 0, 0, 0))
@@ -137,35 +148,29 @@ async def _find_text_channel(guild: discord.Guild, name: str) -> discord.TextCha
         channels = await guild.fetch_channels()
     except discord.HTTPException:
         return None
-    for channel in channels:
-        if isinstance(channel, discord.TextChannel) and channel.name == name:
-            return channel
-    return None
+    return next(
+        (channel for channel in channels if isinstance(channel, discord.TextChannel) and channel.name == name),
+        None,
+    )
 
 
 async def _resolve_member(interaction: discord.Interaction) -> discord.Member | None:
     if interaction.guild is None:
         return None
-    member = interaction.user if isinstance(interaction.user, discord.Member) else None
-    if member is None:
-        try:
-            member = await interaction.guild.fetch_member(interaction.user.id)
-        except discord.HTTPException:
-            return None
     try:
-        member = await interaction.guild.fetch_member(member.id)
+        return await interaction.guild.fetch_member(interaction.user.id)
     except discord.HTTPException:
-        pass
-    return member
+        return interaction.user if isinstance(interaction.user, discord.Member) else None
 
 
 class TeamButton(discord.ui.Button):
-    def __init__(self, role_name: str, emoji: str, style: discord.ButtonStyle):
+    def __init__(self, role_name: str, emoji: str, style: discord.ButtonStyle, *, row: int = 0):
         super().__init__(
             label=role_name,
             emoji=emoji,
             style=style,
             custom_id=f"cyberspace:team:{role_name.lower().replace(' ', '-')}",
+            row=row,
         )
         self.role_name = role_name
 
@@ -190,16 +195,14 @@ class TeamButton(discord.ui.Button):
         selected = role_by_name.get(self.role_name)
         if selected is None:
             await interaction.response.send_message(
-                f"The `{self.role_name}` role does not exist yet. Ask an administrator to create it.",
-                ephemeral=True,
+                f"The `{self.role_name}` role does not exist yet.", ephemeral=True
             )
             return
 
         current_ids = {role.id for role in member.roles}
         if selected.id in current_ids:
             await interaction.response.send_message(
-                f"{self.emoji} You are already connected to **{self.role_name}**.",
-                ephemeral=True,
+                f"{self.emoji} You are already connected to **{self.role_name}**.", ephemeral=True
             )
             return
 
@@ -223,7 +226,68 @@ class TeamButton(discord.ui.Button):
             return
 
         await interaction.response.send_message(
-            f"{self.emoji} **{self.role_name} selected.** Your CyberSpace team identity has been updated.",
+            f"{self.emoji} **{self.role_name} selected.** Your team identity has been updated.",
+            ephemeral=True,
+        )
+
+
+class SelfRoleButton(discord.ui.Button):
+    def __init__(self, role_name: str, emoji: str, style: discord.ButtonStyle, *, row: int):
+        super().__init__(
+            label=role_name.replace("-", " ").title(),
+            emoji=emoji,
+            style=style,
+            custom_id=f"cyberspace:selfrole:{role_name}",
+            row=row,
+        )
+        self.role_name = role_name
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None:
+            await interaction.response.send_message("This button only works inside CyberSpace.", ephemeral=True)
+            return
+        if self.role_name in PROTECTED_ROLES:
+            await interaction.response.send_message("That role cannot be self-assigned.", ephemeral=True)
+            return
+
+        member = await _resolve_member(interaction)
+        if member is None:
+            await interaction.response.send_message("Could not resolve your server membership.", ephemeral=True)
+            return
+
+        try:
+            roles = await interaction.guild.fetch_roles()
+        except discord.HTTPException as exc:
+            await interaction.response.send_message(f"Could not load roles: {exc}", ephemeral=True)
+            return
+
+        role = next((item for item in roles if item.name == self.role_name), None)
+        if role is None:
+            await interaction.response.send_message(
+                f"The `{self.role_name}` role is not currently available.", ephemeral=True
+            )
+            return
+
+        has_role = any(item.id == role.id for item in member.roles)
+        try:
+            if has_role:
+                await member.remove_roles(role, reason="CyberSpace identity role button")
+                action = "removed"
+            else:
+                await member.add_roles(role, reason="CyberSpace identity role button")
+                action = "added"
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "Demon Scope cannot manage that role. Move its bot role above the self-role hierarchy.",
+                ephemeral=True,
+            )
+            return
+        except discord.HTTPException as exc:
+            await interaction.response.send_message(f"Role update failed: {exc}", ephemeral=True)
+            return
+
+        await interaction.response.send_message(
+            f"{self.emoji} **{self.role_name.replace('-', ' ').title()} {action}.**",
             ephemeral=True,
         )
 
@@ -232,7 +296,64 @@ class TeamSelectView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
         for role_name, emoji, style in TEAM_ROLES:
-            self.add_item(TeamButton(role_name, emoji, style))
+            self.add_item(TeamButton(role_name, emoji, style, row=0))
+
+
+class SelfRoleView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        for index, (role_name, emoji, style) in enumerate(SELF_ROLES):
+            self.add_item(SelfRoleButton(role_name, emoji, style, row=0 if index < 5 else 1))
+
+
+class IdentityMatrixView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        for role_name, emoji, style in TEAM_ROLES:
+            self.add_item(TeamButton(role_name, emoji, style, row=0))
+        for index, (role_name, emoji, style) in enumerate(SELF_ROLES):
+            self.add_item(SelfRoleButton(role_name, emoji, style, row=1 if index < 5 else 2))
+
+
+def _role_panel_embed() -> discord.Embed:
+    embed = discord.Embed(
+        title="CYBERSPACE // IDENTITY MATRIX",
+        description=(
+            "Build your identity on the network.\n\n"
+            "**Step 1 — Choose one operational team.** Team buttons are exclusive; selecting a new team replaces the old one.\n"
+            "**Step 2 — Choose any specialties that fit you.** Specialty buttons are toggles and you may select multiple."
+        ),
+        colour=discord.Colour.from_rgb(139, 92, 246),
+    )
+    embed.add_field(
+        name="Operational Team",
+        value=(
+            "🔴 **Red Team**  • offensive security & adversary simulation\n"
+            "🔵 **Blue Team**  • defense, detection & incident response\n"
+            "🟣 **Purple Team**  • offensive + defensive collaboration"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Specialty Identities",
+        value=(
+            "⚡ **Pentester**  • penetration testing\n"
+            "🪲 **Bug Hunter**  • vulnerability research\n"
+            "🔬 **Researcher**  • security research\n"
+            "💻 **Developer**  • code & engineering\n"
+            "🚩 **CTF Player**  • challenges & competitions\n"
+            "🤝 **Mentor**  • community guidance\n"
+            "💗 **Subscriber**  • J2 supporter"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Protected Access",
+        value="Staff, moderation, `Almighty Purple`, `/dev/null`, and Hall of Fame roles are assigned by staff only.",
+        inline=False,
+    )
+    embed.set_footer(text="CyberSpace Identity Service • persistent role controls")
+    return embed
 
 
 async def _send_member_banner(member: discord.Member, *, joined: bool) -> None:
@@ -265,10 +386,11 @@ async def _send_member_banner(member: discord.Member, *, joined: bool) -> None:
             title="CYBERSPACE // ENTRY NODE ONLINE",
             description=(
                 f"Welcome {member.mention}. Your connection to **CyberSpace** has been established.\n\n"
-                "Choose your operational path below. Your team selection can be changed later by pressing another button.\n\n"
+                "Choose your operational path below. You can change teams later by selecting another button.\n\n"
                 "🔴 **Red Team** — offensive security & adversary simulation\n"
                 "🔵 **Blue Team** — defense, detection & incident response\n"
-                "🟣 **Purple Team** — offensive + defensive collaboration"
+                "🟣 **Purple Team** — offensive + defensive collaboration\n\n"
+                f"After choosing a team, visit `#{SELF_ROLE_CHANNEL}` to configure your specialty identities."
             ),
             colour=discord.Colour.from_rgb(139, 92, 246),
         )
@@ -292,100 +414,11 @@ async def _send_member_banner(member: discord.Member, *, joined: bool) -> None:
             pass
 
 
-class SelfRoleButton(discord.ui.Button):
-    def __init__(self, role_name: str, emoji: str, style: discord.ButtonStyle, row: int):
-        label = role_name.replace("-", " ").title()
-        super().__init__(
-            label=label,
-            emoji=emoji,
-            style=style,
-            custom_id=f"cyberspace:selfrole:{role_name}",
-            row=row,
-        )
-        self.role_name = role_name
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        if interaction.guild is None:
-            await interaction.response.send_message("This button only works inside CyberSpace.", ephemeral=True)
-            return
-
-        try:
-            roles = await interaction.guild.fetch_roles()
-        except discord.HTTPException as exc:
-            await interaction.response.send_message(f"Could not load roles: {exc}", ephemeral=True)
-            return
-
-        role = next((item for item in roles if item.name == self.role_name), None)
-        if role is None:
-            await interaction.response.send_message(
-                f"The `{self.role_name}` role is not currently available.", ephemeral=True
-            )
-            return
-
-        member = await _resolve_member(interaction)
-        if member is None:
-            await interaction.response.send_message("Could not resolve your server membership.", ephemeral=True)
-            return
-
-        has_role = any(item.id == role.id for item in member.roles)
-        try:
-            if has_role:
-                await member.remove_roles(role, reason="CyberSpace self-role button")
-                action = "removed"
-            else:
-                await member.add_roles(role, reason="CyberSpace self-role button")
-                action = "added"
-        except discord.Forbidden:
-            await interaction.response.send_message(
-                "Demon Scope cannot manage that role. Move its bot role above the self-role hierarchy.",
-                ephemeral=True,
-            )
-            return
-        except discord.HTTPException as exc:
-            await interaction.response.send_message(f"Role update failed: {exc}", ephemeral=True)
-            return
-
-        await interaction.response.send_message(
-            f"{self.emoji} `{self.role_name}` **{action}**.", ephemeral=True
-        )
-
-
-class SelfRoleView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-        for index, (role_name, emoji, style) in enumerate(SELF_ROLES):
-            self.add_item(SelfRoleButton(role_name, emoji, style, 0 if index < 5 else 1))
-
-
-def _role_panel_embed() -> discord.Embed:
-    embed = discord.Embed(
-        title="CYBERSPACE // IDENTITY MATRIX",
-        description=(
-            "Select the disciplines that represent you across the network.\n\n"
-            "Buttons are **toggles** — press once to connect a role and press again to disconnect it."
-        ),
-        colour=discord.Colour.from_rgb(139, 92, 246),
-    )
-    embed.add_field(
-        name="Available identities",
-        value=(
-            "⚡ **Pentester**  • offensive security\n"
-            "🪲 **Bug Hunter**  • vulnerability research\n"
-            "🔬 **Researcher**  • security research\n"
-            "💻 **Developer**  • code & engineering\n"
-            "🚩 **CTF Player**  • challenges & competitions\n"
-            "🤝 **Mentor**  • community guidance\n"
-            "💗 **Subscriber**  • J2 supporter"
-        ),
-        inline=False,
-    )
-    embed.set_footer(text="CyberSpace Identity Service • persistent self-role controls")
-    return embed
-
-
 def install_cyberspace_community(bot: discord.Client) -> None:
-    bot.add_view(SelfRoleView())
+    # Register every persistent custom_id so old and new panels continue to work
+    # after a bot restart.
     bot.add_view(TeamSelectView())
+    bot.add_view(SelfRoleView())
 
     async def on_member_join(member: discord.Member) -> None:
         await _send_member_banner(member, joined=True)
@@ -404,7 +437,7 @@ def register_cyberspace_community_commands(bot: discord.Client) -> None:
         default_permissions=discord.Permissions(manage_guild=True),
     )
 
-    @group.command(name="roles-panel", description="Post the persistent CyberSpace self-role panel")
+    @group.command(name="roles-panel", description="Post the CyberSpace identity matrix")
     @app_commands.guild_only()
     async def roles_panel(interaction: discord.Interaction):
         if interaction.guild is None:
@@ -416,12 +449,12 @@ def register_cyberspace_community_commands(bot: discord.Client) -> None:
             )
             return
         try:
-            await channel.send(embed=_role_panel_embed(), view=SelfRoleView())
+            await channel.send(embed=_role_panel_embed(), view=IdentityMatrixView())
         except discord.HTTPException as exc:
-            await interaction.response.send_message(f"Could not post the role panel: {exc}", ephemeral=True)
+            await interaction.response.send_message(f"Could not post the identity matrix: {exc}", ephemeral=True)
             return
         await interaction.response.send_message(
-            f"Self-role panel posted in {channel.mention}.", ephemeral=True
+            f"Identity matrix posted in {channel.mention}.", ephemeral=True
         )
 
     @group.command(name="welcome-preview", description="Post a preview of the CyberSpace welcome card")
