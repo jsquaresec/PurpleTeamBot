@@ -11,6 +11,7 @@ from bot.personpages_person_commands import register_personpages_person_commands
 from bot.provider_commands import register_provider_commands
 from bot.security_commands import register_security_commands
 import bot.server_template_v2 as server_template_v2
+from bot.server_template_fast_builder import install_private_template_fast
 from bot.server_template_role_order import ensure_roles_top_down
 from bot.threaded_intel_commands import register_threaded_intel_commands
 from bot.threaded_lookup_commands import register_threaded_lookup_commands
@@ -21,9 +22,11 @@ from core.config import settings
 from storage.db import init_db
 
 
-# Use the hardened top-down role ordering implementation for the private J2
-# template installer. server_template_v2 resolves _ensure_roles at runtime.
+# Use the hardened role-ordering implementation and the streamlined full rebuild
+# path for the private J2 installer. The command resolves these module attributes
+# at runtime, so the replacements apply without changing the public command API.
 server_template_v2._ensure_roles = ensure_roles_top_down
+server_template_v2.install_private_template_v2 = install_private_template_fast
 register_owner_template_commands_v2 = server_template_v2.register_owner_template_commands_v2
 
 
