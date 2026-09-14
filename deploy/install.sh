@@ -33,6 +33,10 @@ if [[ ! -f "$APP_DIR/.env" ]]; then
   echo "Created $APP_DIR/.env — add your Discord token/API keys before starting the service."
 fi
 
+# Private runtime configuration lives outside Git tracking.
+mkdir -p "$APP_DIR/private"
+chmod 700 "$APP_DIR/private"
+
 chown -R "$APP_USER:$APP_USER" "$APP_DIR"
 cp "$APP_DIR/deploy/purpleteambot.service" /etc/systemd/system/purpleteambot.service
 cp "$APP_DIR/deploy/purpleteambot-restart.service" /etc/systemd/system/purpleteambot-restart.service
