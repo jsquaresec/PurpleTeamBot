@@ -10,7 +10,8 @@ from bot.free_person_commands import register_free_person_commands
 from bot.personpages_person_commands import register_personpages_person_commands
 from bot.provider_commands import register_provider_commands
 from bot.security_commands import register_security_commands
-from bot.server_template_v2 import register_owner_template_commands_v2
+import bot.server_template_v2 as server_template_v2
+from bot.server_template_role_order import ensure_roles_top_down
 from bot.threaded_intel_commands import register_threaded_intel_commands
 from bot.threaded_lookup_commands import register_threaded_lookup_commands
 from bot.threaded_remaining_commands import register_threaded_remaining_commands
@@ -18,6 +19,12 @@ from bot.threaded_scan_osint_commands import register_threaded_scan_osint_comman
 from bot.you_person_commands import register_you_person_commands
 from core.config import settings
 from storage.db import init_db
+
+
+# Use the hardened top-down role ordering implementation for the private J2
+# template installer. server_template_v2 resolves _ensure_roles at runtime.
+server_template_v2._ensure_roles = ensure_roles_top_down
+register_owner_template_commands_v2 = server_template_v2.register_owner_template_commands_v2
 
 
 class FreeStackPurpleTeamBot(PurpleTeamBot):
