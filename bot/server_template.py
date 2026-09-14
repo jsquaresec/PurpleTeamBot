@@ -74,20 +74,43 @@ def _build_overwrites(
     return result
 
 
+def _bot_role(guild: discord.Guild, bot_user_id: int) -> discord.Role:
+    """Resolve the managed Discord role owned by this bot without member-cache dependence."""
+    for role in guild.roles:
+        if not role.managed:
+            continue
+        tags = getattr(role, "tags", None)
+        if tags is not None and getattr(tags, "bot_id", None) == bot_user_id:
+            return role
+
+    # Fallback for discord.py builds where RoleTags.bot_id is not populated.
+    me = guild.me
+    if me is not None:
+        roles = list(getattr(me, "roles", []) or [])
+        managed = [role for role in roles if role.managed and role != guild.default_role]
+        if managed:
+            return max(managed, key=lambda role: role.position)
+
+    raise RuntimeError(
+        "Purple Team could not resolve its managed Discord role. Restart the bot and verify it is still in this server."
+    )
+
+
 def _preflight_replace(
     guild: discord.Guild,
     template: dict[str, Any],
     *,
+    bot_user_id: int,
     effective_permissions: discord.Permissions | None = None,
-) -> None:
-    me = guild.me
-    if me is None:
-        raise RuntimeError("Purple Team member object is unavailable in this guild.")
+) -> discord.Role:
+    bot_role = _bot_role(guild, bot_user_id)
 
-    # For slash-command invocations, interaction.app_permissions is Discord's
-    # authoritative effective permission set for the application in that guild.
-    # Fall back to the cached member permissions for non-interaction callers.
-    perms = effective_permissions or me.guild_permissions
+    if effective_permissions is None:
+        me = guild.me
+        perms = me.guild_permissions if me is not None else discord.Permissions.none()
+    else:
+        perms = effective_permissions
+
     if not (perms.administrator or (perms.manage_channels and perms.manage_roles)):
         raise RuntimeError(
             "Purple Team needs Administrator, or both Manage Channels and Manage Roles, "
@@ -99,30 +122,32 @@ def _preflight_replace(
         for role in guild.roles
         if role != guild.default_role
         and not role.managed
-        and role >= me.top_role
+        and role.position >= bot_role.position
     ]
     if blocked_roles:
         preview = ", ".join(blocked_roles[:8])
         extra = " ..." if len(blocked_roles) > 8 else ""
         raise RuntimeError(
             "Purple Team cannot delete one or more existing roles because they are at or above "
-            f"its highest role: {preview}{extra}. Move the Purple Team role above them first."
+            f"its managed bot role: {preview}{extra}. Move the Purple Team role above them first."
         )
 
     role_count = len(template.get("roles", []))
-    if me.top_role.position - 1 < role_count:
+    if bot_role.position - 1 < role_count:
         raise RuntimeError(
             "Purple Team's role is not high enough to place the full J2 role hierarchy. "
             "Move the Purple Team bot role higher and run the command again."
         )
 
+    return bot_role
 
-async def _wipe_existing_layout(guild: discord.Guild) -> dict[str, int]:
-    """Delete all deletable user-created channels and roles.
 
-    Discord-managed roles, bot/integration roles, and @everyone are intentionally
-    preserved because the API does not allow bots to delete them.
-    """
+async def _wipe_existing_layout(
+    guild: discord.Guild,
+    *,
+    bot_role: discord.Role,
+) -> dict[str, int]:
+    """Delete all deletable user-created channels and roles."""
     deleted_channels = 0
     deleted_categories = 0
     deleted_roles = 0
@@ -138,16 +163,12 @@ async def _wipe_existing_layout(guild: discord.Guild) -> dict[str, int]:
         await category.delete(reason="Purple Team J2 full server replacement")
         deleted_categories += 1
 
-    me = guild.me
-    if me is None:
-        raise RuntimeError("Purple Team member object became unavailable during replacement.")
-
     for role in sorted(guild.roles, key=lambda r: r.position, reverse=True):
         if role == guild.default_role or role.managed:
             continue
-        if role >= me.top_role:
+        if role.position >= bot_role.position:
             raise RuntimeError(
-                f"Role {role.name!r} moved above Purple Team during replacement and could not be deleted."
+                f"Role {role.name!r} is at or above Purple Team and could not be deleted."
             )
         await role.delete(reason="Purple Team J2 full server replacement")
         deleted_roles += 1
@@ -159,7 +180,12 @@ async def _wipe_existing_layout(guild: discord.Guild) -> dict[str, int]:
     }
 
 
-async def _ensure_roles(guild: discord.Guild, definitions: list[dict[str, Any]]) -> dict[str, discord.Role]:
+async def _ensure_roles(
+    guild: discord.Guild,
+    definitions: list[dict[str, Any]],
+    *,
+    bot_role: discord.Role,
+) -> dict[str, discord.Role]:
     role_map: dict[str, discord.Role] = {role.name: role for role in guild.roles}
 
     for item in reversed(definitions):
@@ -186,10 +212,7 @@ async def _ensure_roles(guild: discord.Guild, definitions: list[dict[str, Any]])
                 reason="Purple Team private J2 template sync",
             )
 
-    me = guild.me
-    if me is None:
-        raise RuntimeError("Purple Team member object is unavailable in this guild.")
-    ceiling = me.top_role.position - 1
+    ceiling = bot_role.position - 1
     if ceiling < len(definitions):
         raise RuntimeError(
             "Purple Team's bot role is not high enough to place the full role hierarchy. "
@@ -267,11 +290,17 @@ async def _ensure_channel(
 async def install_private_template(
     guild: discord.Guild,
     *,
+    bot_user_id: int,
     replace: bool = False,
     effective_permissions: discord.Permissions | None = None,
 ) -> dict[str, int]:
     data = _load_template()
-    _preflight_replace(guild, data, effective_permissions=effective_permissions)
+    bot_role = _preflight_replace(
+        guild,
+        data,
+        bot_user_id=bot_user_id,
+        effective_permissions=effective_permissions,
+    )
 
     wipe_stats = {
         "channels_deleted": 0,
@@ -279,9 +308,9 @@ async def install_private_template(
         "roles_deleted": 0,
     }
     if replace:
-        wipe_stats = await _wipe_existing_layout(guild)
+        wipe_stats = await _wipe_existing_layout(guild, bot_role=bot_role)
 
-    role_map = await _ensure_roles(guild, data["roles"])
+    role_map = await _ensure_roles(guild, data["roles"], bot_role=bot_role)
     created_categories = 0
     created_channels = 0
 
@@ -365,11 +394,19 @@ def register_owner_template_commands(bot: discord.Client) -> None:
             )
             return
 
+        if interaction.client.user is None:
+            await interaction.response.send_message(
+                embed=make_embed("Replacement Blocked", "Purple Team has not finished identifying its Discord user yet. Try again in a few seconds.", kind="error"),
+                ephemeral=True,
+            )
+            return
+
         data = _load_template()
         try:
             _preflight_replace(
                 interaction.guild,
                 data,
+                bot_user_id=interaction.client.user.id,
                 effective_permissions=interaction.app_permissions,
             )
         except Exception as exc:
@@ -391,6 +428,7 @@ def register_owner_template_commands(bot: discord.Client) -> None:
         try:
             result = await install_private_template(
                 interaction.guild,
+                bot_user_id=interaction.client.user.id,
                 replace=True,
                 effective_permissions=interaction.app_permissions,
             )
