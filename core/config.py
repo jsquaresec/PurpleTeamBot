@@ -56,6 +56,7 @@ class Settings:
     snapshot_startup_delay_seconds: int = max(5, _int("SNAPSHOT_STARTUP_DELAY_SECONDS", 15))
     snapshot_state_path: str = os.getenv("SNAPSHOT_STATE_PATH", ".purple_team_snapshot_date").strip() or ".purple_team_snapshot_date"
     bot_owner_id: int = _int("BOT_OWNER_ID")
+    server_template_path: str = os.getenv("SERVER_TEMPLATE_PATH", "private/j2_server_template.json").strip() or "private/j2_server_template.json"
     database_path: str = os.getenv("DATABASE_PATH", "purple_team.db")
     database_url: str = os.getenv("DATABASE_URL", "").strip()
     max_active_scans: int = max(1, _int("MAX_ACTIVE_SCANS", 1))
