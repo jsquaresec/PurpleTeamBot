@@ -1,5 +1,6 @@
 import discord
 
+from bot.csec_access import csec_access, member_has_csec_role
 from bot.ui import make_embed
 from core.config import settings
 
@@ -13,11 +14,12 @@ async def _deny(interaction: discord.Interaction, title: str, message: str) -> N
 
 
 def install_channel_guard(bot: discord.Client) -> None:
-    """Restrict application commands to explicitly approved Discord channels.
+    """Central authorization boundary for Purple Team application commands.
 
-    Normal commands fail closed when no channel IDs are configured. The configured
-    bot owner may use maintenance/setup commands anywhere inside the authorized
-    guild so recovery operations are not stranded after channel replacement.
+    The configured owner may perform setup/recovery anywhere in the authorized
+    guild. Normal CSEC commands require the configured access role and an approved
+    CSEC command channel. Channel and role settings are read dynamically from the
+    persistent CSEC access store, so changes do not require editing .env.
     """
 
     async def interaction_check(interaction: discord.Interaction) -> bool:
@@ -37,32 +39,43 @@ def install_channel_guard(bot: discord.Client) -> None:
             )
             return False
 
-        # The configured bot owner may run recovery/setup commands anywhere in the
-        # authorized guild. This is important after destructive template installs,
-        # because channel IDs change and the old allowlist can no longer match.
+        # Owner recovery/setup remains available even if channel IDs or access-role
+        # configuration are being changed.
         if settings.bot_owner_id and interaction.user.id == settings.bot_owner_id:
             return True
 
-        allowed_channels = settings.discord_allowed_channel_ids
+        command_name = interaction.command.qualified_name if interaction.command else ""
+
+        # CSEC configuration is owner-only at the command implementation itself.
+        # Let it reach that handler so it can return the dedicated access message.
+        if command_name.startswith("csec-config "):
+            return True
+
+        if not member_has_csec_role(interaction.user):
+            await _deny(
+                interaction,
+                "Almighty Purple Required",
+                f"Purple Team CSEC commands are restricted to members with the `{csec_access.role_name}` role.",
+            )
+            return False
+
+        allowed_channels = csec_access.channel_ids
         if not allowed_channels:
             await _deny(
                 interaction,
-                "Channel Guard Not Configured",
-                "No approved Purple Team channels are configured. Set `DISCORD_ALLOWED_CHANNEL_IDS` before using commands.",
+                "CSEC Channel Guard Not Configured",
+                "No approved Purple Team CSEC command channels are configured. Ask the bot owner to use `/csec-config channel-add`.",
             )
             return False
 
         if interaction.channel_id not in allowed_channels:
             await _deny(
                 interaction,
-                "Restricted Channel",
-                "Purple Team commands can only be used in designated operational channels.",
+                "Restricted CSEC Channel",
+                "Purple Team CSEC commands can only be used in approved operational channels.",
             )
             return False
 
         return True
 
-    # discord.py calls CommandTree.interaction_check before every application
-    # command. Replacing it on this tree gives every current and future slash
-    # command the same centralized authorization boundary.
     bot.tree.interaction_check = interaction_check
