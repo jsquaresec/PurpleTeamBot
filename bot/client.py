@@ -43,15 +43,16 @@ def can_use_person_search(interaction: discord.Interaction) -> bool:
 class PurpleTeamBot(commands.Bot):
     def __init__(self) -> None:
         # CyberSpace community + event-stream logging needs these gateway events.
-        # Members and Message Content must also be enabled in the Discord Developer
-        # Portal under Privileged Gateway Intents.
+        # Server Members is privileged and must also be enabled in Discord's
+        # Developer Portal. Message Content remains off by default so the bot can
+        # connect safely without requiring that separate privileged intent.
         intents = discord.Intents.none()
         intents.guilds = True
         intents.members = True
         intents.moderation = True
         intents.voice_states = True
         intents.messages = True
-        intents.message_content = True
+        intents.message_content = False
         super().__init__(command_prefix="!", intents=intents)
 
     async def setup_hook(self) -> None:
