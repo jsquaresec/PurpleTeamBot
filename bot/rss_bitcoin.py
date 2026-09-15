@@ -21,10 +21,9 @@ BITCOIN_CHANNEL = "🪙・bitcoin"
 POLL_SECONDS = 600
 MAX_POSTS_PER_PERSON_PER_CHECK = 2
 STATE_PATH = Path("private/rss_bitcoin_state.json")
+REQUEST_TIMEOUT_SECONDS = 6
+PERSON_TIMEOUT_SECONDS = 24
 
-# Five Bitcoin voices. We consume their public X timelines through RSSHub so
-# Purple Team does not need an X API key. Multiple public instances are tried
-# in order because any single public RSSHub instance can occasionally fail.
 PEOPLE = [
     ("Michael Saylor", "saylor"),
     ("Jack Dorsey", "jack"),
@@ -33,13 +32,27 @@ PEOPLE = [
     ("Lyn Alden", "LynAldenContact"),
 ]
 
+# Current RSSHub official/public instances, followed by the older mirrors that
+# were already working for some accounts. This makes a single 503 far less
+# likely to knock a person offline.
 RSSHUB_BASES = [
+    "https://rsshub.app",
+    "https://rsshub.rssforever.com",
+    "https://rsshub.feeded.xyz",
+    "https://hub.slarker.me",
+    "https://rsshub.pseudoyu.com",
     "https://rsshub.stsecurity.moe",
     "https://rsshub.yfi.moe",
     "https://rsshub.umzzz.com",
 ]
 
-# Keep the channel focused on Bitcoin rather than every post these accounts make.
+# Try the filtered route first, then fall back to the plain user timeline route
+# in case a public instance does not support the optional suffix consistently.
+ROUTE_TEMPLATES = [
+    "/twitter/user/{handle}/exclude_rts_replies",
+    "/twitter/user/{handle}",
+]
+
 BITCOIN_TERMS = (
     "bitcoin",
     "#bitcoin",
@@ -177,26 +190,44 @@ class BitcoinPeopleRSS:
         )
 
     async def fetch_person(self, name: str, handle: str):
-        headers = {"User-Agent": "CyberSpace-Bitcoin-RSS/1.0 PurpleTeamBot"}
+        headers = {"User-Agent": "CyberSpace-Bitcoin-RSS/1.1 PurpleTeamBot"}
         errors: list[str] = []
+        timeout = httpx.Timeout(REQUEST_TIMEOUT_SECONDS)
 
-        async with httpx.AsyncClient(timeout=20, follow_redirects=True, headers=headers) as client:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
             for base in RSSHUB_BASES:
-                url = f"{base}/twitter/user/{handle}/exclude_rts_replies"
-                try:
-                    response = await client.get(url)
-                    response.raise_for_status()
-                    parsed = feedparser.parse(response.content)
-                    if getattr(parsed, "bozo", False) and not parsed.entries:
-                        raise RuntimeError(str(getattr(parsed, "bozo_exception", "invalid RSS/Atom feed")))
-                    if not parsed.entries:
-                        raise RuntimeError("feed returned no entries")
-                    self.last_instance[name] = base
-                    return parsed
-                except Exception as exc:
-                    errors.append(f"{base}: {str(exc)[:120]}")
+                for route_template in ROUTE_TEMPLATES:
+                    url = f"{base}{route_template.format(handle=handle)}"
+                    try:
+                        response = await client.get(url)
+                        response.raise_for_status()
+                        parsed = feedparser.parse(response.content)
+                        if getattr(parsed, "bozo", False) and not parsed.entries:
+                            raise RuntimeError(str(getattr(parsed, "bozo_exception", "invalid RSS/Atom feed")))
+                        if not parsed.entries:
+                            raise RuntimeError("feed returned no entries")
+                        self.last_instance[name] = url
+                        return parsed
+                    except Exception as exc:
+                        label = f"{base}:{route_template.split('/')[-1] or 'user'}"
+                        errors.append(f"{label} -> {type(exc).__name__}: {str(exc)[:90]}")
 
-        raise RuntimeError(" | ".join(errors)[:500])
+        raise RuntimeError(" | ".join(errors[-8:])[:900])
+
+    async def _fetch_all_people(self):
+        async def one(name: str, handle: str):
+            try:
+                parsed = await asyncio.wait_for(
+                    self.fetch_person(name, handle),
+                    timeout=PERSON_TIMEOUT_SECONDS,
+                )
+                return name, handle, parsed, None
+            except asyncio.TimeoutError:
+                return name, handle, None, f"Timed out after {PERSON_TIMEOUT_SECONDS}s across RSS fallbacks"
+            except Exception as exc:
+                return name, handle, None, str(exc)[:900]
+
+        return await asyncio.gather(*(one(name, handle) for name, handle in PEOPLE))
 
     def make_embed(self, name: str, handle: str, entry) -> discord.Embed:
         text = _post_text(entry)
@@ -240,43 +271,39 @@ class BitcoinPeopleRSS:
             first_seed = not self.state.seeded
             self.last_errors = {}
 
-            for name, handle in PEOPLE:
-                try:
-                    parsed = await self.fetch_person(name, handle)
-                    source_successes += 1
-                    entries = list(parsed.entries)
-                    unseen_matches = []
+            results = await self._fetch_all_people()
+            for name, handle, parsed, error in results:
+                if error is not None or parsed is None:
+                    self.last_errors[name] = error or "Unknown feed error"
+                    continue
 
-                    for entry in entries:
-                        key = _entry_key(handle, entry)
-                        if key in self.state.seen:
-                            continue
-                        # Mark every observed item as seen so old non-Bitcoin posts
-                        # do not keep getting reconsidered on every poll.
-                        if not _is_bitcoin_post(entry):
-                            self.state.seen.add(key)
-                            continue
-                        unseen_matches.append((key, entry))
-
-                    if first_seed:
-                        for key, _ in unseen_matches:
-                            self.state.seen.add(key)
+                source_successes += 1
+                unseen_matches = []
+                for entry in list(parsed.entries):
+                    key = _entry_key(handle, entry)
+                    if key in self.state.seen:
                         continue
+                    if not _is_bitcoin_post(entry):
+                        self.state.seen.add(key)
+                        continue
+                    unseen_matches.append((key, entry))
 
-                    unseen_matches = list(reversed(unseen_matches[:MAX_POSTS_PER_PERSON_PER_CHECK]))
-                    for key, entry in unseen_matches:
-                        try:
-                            await channel.send(
-                                embed=self.make_embed(name, handle, entry),
-                                allowed_mentions=discord.AllowedMentions.none(),
-                            )
-                            self.state.seen.add(key)
-                            total_new += 1
-                        except discord.HTTPException as exc:
-                            self.last_errors[name] = f"Discord post failed: {exc}"
-                            break
-                except Exception as exc:
-                    self.last_errors[name] = str(exc)[:500]
+                if first_seed:
+                    for key, _ in unseen_matches:
+                        self.state.seen.add(key)
+                    continue
+
+                for key, entry in reversed(unseen_matches[:MAX_POSTS_PER_PERSON_PER_CHECK]):
+                    try:
+                        await channel.send(
+                            embed=self.make_embed(name, handle, entry),
+                            allowed_mentions=discord.AllowedMentions.none(),
+                        )
+                        self.state.seen.add(key)
+                        total_new += 1
+                    except discord.HTTPException as exc:
+                        self.last_errors[name] = f"Discord post failed: {exc}"
+                        break
 
             if first_seed:
                 self.state.seeded = True
@@ -285,7 +312,6 @@ class BitcoinPeopleRSS:
             return total_new, source_successes
 
     async def push_latest(self) -> tuple[int, int]:
-        """Post the newest Bitcoin-matching item from each person once."""
         async with self._running_check:
             channel = await self.find_channel()
             if channel is None:
@@ -295,22 +321,27 @@ class BitcoinPeopleRSS:
             source_successes = 0
             self.last_errors = {}
 
-            for name, handle in PEOPLE:
+            results = await self._fetch_all_people()
+            for name, handle, parsed, error in results:
+                if error is not None or parsed is None:
+                    self.last_errors[name] = error or "Unknown feed error"
+                    continue
+
+                source_successes += 1
+                match = next((entry for entry in parsed.entries if _is_bitcoin_post(entry)), None)
+                if match is None:
+                    self.last_errors[name] = "No recent Bitcoin-matching post in feed window"
+                    continue
+
                 try:
-                    parsed = await self.fetch_person(name, handle)
-                    source_successes += 1
-                    match = next((entry for entry in parsed.entries if _is_bitcoin_post(entry)), None)
-                    if match is None:
-                        self.last_errors[name] = "No recent Bitcoin-matching post in feed window"
-                        continue
                     await channel.send(
                         embed=self.make_embed(name, handle, match),
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
                     self.state.seen.add(_entry_key(handle, match))
                     posted += 1
-                except Exception as exc:
-                    self.last_errors[name] = str(exc)[:500]
+                except discord.HTTPException as exc:
+                    self.last_errors[name] = f"Discord post failed: {exc}"
 
             self.state.seeded = True
             self.state.save()
@@ -363,6 +394,10 @@ def register_bitcoin_rss_commands(bot: discord.Client) -> None:
         service: BitcoinPeopleRSS = getattr(bot, "bitcoin_rss")
         check_text = discord.utils.format_dt(service.last_check, style="R") if service.last_check else "Not checked yet"
         errors = "\n".join(f"• **{name}:** {error}" for name, error in service.last_errors.items()) or "None"
+        routes = "\n".join(
+            f"• **{name}:** `{service.last_instance.get(name, 'not resolved yet')}`"
+            for name, _ in PEOPLE
+        )
         embed = discord.Embed(
             title="CYBERSPACE // BITCOIN RSS STATUS",
             description=f"Destination: `{BITCOIN_CHANNEL}`\nPolling: every **{POLL_SECONDS // 60} minutes**\nLast check: {check_text}",
@@ -373,6 +408,7 @@ def register_bitcoin_rss_commands(bot: discord.Client) -> None:
             value="\n".join(f"• {name} (`@{handle}`)" for name, handle in PEOPLE),
             inline=False,
         )
+        embed.add_field(name="Resolved feeds", value=routes[:1024], inline=False)
         embed.add_field(name="Last errors", value=errors[:1024], inline=False)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
