@@ -13,6 +13,7 @@ from bot.extra_commands import register_extra_commands
 from bot.free_person_commands import register_free_person_commands
 from bot.personpages_person_commands import register_personpages_person_commands
 from bot.provider_commands import register_provider_commands
+from bot.rss_bitcoin import install_rss_bitcoin, register_bitcoin_rss_commands
 from bot.rss_cyber_news import install_rss_cyber_news, register_rss_commands
 from bot.security_commands import register_security_commands
 import bot.server_template_v2 as server_template_v2
@@ -73,6 +74,7 @@ async def main() -> None:
     register_almighty_purple_loader(bot)
     register_cyberspace_community_commands(bot)
     register_rss_commands(bot)
+    register_bitcoin_rss_commands(bot)
     install_cyberspace_community(bot)
 
     # Install after the community module so the event-stream logger can replace
@@ -80,6 +82,7 @@ async def main() -> None:
     install_event_stream_logging(bot)
 
     install_rss_cyber_news(bot)
+    install_rss_bitcoin(bot)
     install_daily_snapshot(bot)
     await bot.start_bot()
 
