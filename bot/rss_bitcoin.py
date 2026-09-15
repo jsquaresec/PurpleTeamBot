@@ -26,10 +26,10 @@ PERSON_TIMEOUT_SECONDS = 24
 
 PEOPLE = [
     ("Michael Saylor", "saylor"),
-    ("Jack Dorsey", "jack"),
-    ("Adam Back", "adam3us"),
-    ("Jameson Lopp", "lopp"),
-    ("Lyn Alden", "LynAldenContact"),
+    ("Jack Mallers", "jackmallers"),
+    ("Samson Mow", "Excellion"),
+    ("Pierre Rochard", "BitcoinPierre"),
+    ("Natalie Brunell", "natbrunell"),
 ]
 
 # Current RSSHub official/public instances, followed by the older mirrors that
